@@ -1,0 +1,31 @@
+{
+  "name": "career-mate",
+  "version": "0.1.0",
+  "description": "Personal CLI for tracking and enriching a job search pipeline",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cm": "./bin/cm.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "commander": "^15.0.0",
+    "tsx": "^4.23.13"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
