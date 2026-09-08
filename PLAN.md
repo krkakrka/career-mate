@@ -89,7 +89,15 @@ Config files (`src/config/*.json`, user-editable, not DB rows since they're low-
 
 ## Delivery process — commitable steps
 
-Work proceeds one step at a time, each a separate commit. For each step: write its tests first (or alongside), implement until green, commit. A step should not start until the previous one's tests pass — later steps depend on earlier ones' schema/plumbing.
+Work proceeds one step at a time, each a separate commit. For each step:
+
+1. Write that step's tests (first or alongside).
+2. Implement until the tests are green.
+3. Send the uncommitted diff to an independent review agent (the `code-review` skill/subagent — not a context-sharing fork, so the review isn't anchored to the same assumptions as the implementation).
+4. Address every comment the reviewer raises — fix, or, if a comment is wrong or out of scope for this step, say why in the commit and move on rather than silently dropping it.
+5. Re-run the tests, then commit.
+
+A step should not start until the previous one's tests pass *and* has been through this review — later steps depend on earlier ones' schema/plumbing, so defects compound if they're not caught early.
 
 **Test framework**: [Vitest](https://vitest.dev) — fast, TS-native, good `child_process` support for black-box CLI testing.
 
