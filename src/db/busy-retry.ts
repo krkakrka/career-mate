@@ -1,3 +1,5 @@
+import { sleepSync } from '../lib/sleep-sync.js';
+
 /**
  * better-sqlite3's busy_timeout pragma covers normal lock-wait retries (e.g.
  * BEGIN IMMEDIATE contending with another writer), but empirically does NOT
@@ -13,7 +15,7 @@ export function withBusyRetry<T>(fn: () => T, attempts = 20, delayMs = 25): T {
     } catch (error) {
       const isBusy = error instanceof Error && (error as NodeJS.ErrnoException).code === 'SQLITE_BUSY';
       if (!isBusy || attempt === attempts) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      sleepSync(delayMs);
     }
   }
   throw new Error('unreachable');
