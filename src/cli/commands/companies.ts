@@ -1,31 +1,101 @@
 import type { Command } from 'commander';
-import { notImplemented } from '../not-implemented.js';
+import { getDb } from '../../db/client.js';
+import { DuplicateError, NotFoundError } from '../../db/errors.js';
+import {
+  createCompany,
+  getCompanyById,
+  listCompanies,
+  setConnections,
+  setPreferenceRating,
+  type Company,
+} from '../../db/repositories/companies.js';
+import { reportKnownErrors } from '../handle-known-errors.js';
+import { parseHttpUrl, parsePositiveInt, parseRating } from '../parsers.js';
+
+const KNOWN_ERRORS = [DuplicateError, NotFoundError];
+
+function printCompanyDetail(company: Company): void {
+  console.log(`#${company.id} ${company.name ?? '(unnamed — not yet fetched)'}`);
+  console.log(`URL: ${company.url}`);
+  console.log(`Description: ${company.description ?? '(none yet)'}`);
+  console.log(`Preference rating: ${company.preference_rating}`);
+  console.log(`Connections: ${company.connections ?? '(none)'}`);
+  console.log(`IPO status: ${company.ipo_status ?? '(unknown)'}`);
+  console.log(`AI-proof score: ${company.ai_proof_score ?? '(unknown)'}`);
+  console.log(`WLB score: ${company.wlb_score ?? '(unknown)'}`);
+  console.log(`Created: ${company.created_at}`);
+}
 
 export function registerCompaniesCommand(program: Command): void {
   const companies = program.command('companies').description('Manage tracked companies');
 
   companies
-    .command('add <url>')
+    .command('add')
     .description('Add a new company by URL')
-    .action(notImplemented('companies add'));
+    .argument('<url>', 'Company URL', parseHttpUrl)
+    .action((url: string) => {
+      reportKnownErrors(KNOWN_ERRORS, () => {
+        const db = getDb();
+        const company = createCompany(db, url);
+        console.log(`Added company #${company.id}: ${company.url}`);
+      });
+    });
 
   companies
     .command('list')
     .description('List tracked companies')
-    .action(notImplemented('companies list'));
+    .action(() => {
+      const db = getDb();
+      const rows = listCompanies(db);
+      if (rows.length === 0) {
+        console.log('No companies tracked yet. Add one with `cm companies add <url>`.');
+        return;
+      }
+      for (const company of rows) {
+        console.log(
+          `#${company.id}  ${company.name ?? '(unnamed)'}  ${company.url}  pref=${company.preference_rating}`,
+        );
+      }
+    });
 
   companies
-    .command('show <id>')
+    .command('show')
     .description('Show company detail')
-    .action(notImplemented('companies show'));
+    .argument('<id>', 'Company id', parsePositiveInt)
+    .action((id: number) => {
+      const db = getDb();
+      const company = getCompanyById(db, id);
+      if (!company) {
+        console.error(`Company #${id} not found`);
+        process.exitCode = 1;
+        return;
+      }
+      printCompanyDetail(company);
+    });
 
   companies
-    .command('set-preference <id> <rating>')
+    .command('set-preference')
     .description('Set your manual preference rating for a company (-2 to 2)')
-    .action(notImplemented('companies set-preference'));
+    .argument('<id>', 'Company id', parsePositiveInt)
+    .argument('<rating>', 'Preference rating, -2 to 2', parseRating)
+    .action((id: number, rating: number) => {
+      reportKnownErrors(KNOWN_ERRORS, () => {
+        const db = getDb();
+        const company = setPreferenceRating(db, id, rating);
+        console.log(`Company #${company.id} preference rating set to ${company.preference_rating}`);
+      });
+    });
 
   companies
-    .command('set-connections <id> <note>')
+    .command('set-connections')
     .description('Record a personal connection/referral note for a company')
-    .action(notImplemented('companies set-connections'));
+    .argument('<id>', 'Company id', parsePositiveInt)
+    .argument('<note>', 'Connections note')
+    .action((id: number, note: string) => {
+      reportKnownErrors(KNOWN_ERRORS, () => {
+        const db = getDb();
+        const company = setConnections(db, id, note);
+        console.log(`Company #${company.id} connections note updated`);
+      });
+    });
 }
