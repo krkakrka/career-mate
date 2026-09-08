@@ -18,7 +18,7 @@ Every action and periodic job is timestamped and logged for later debugging.
 
 ## Status
 
-Early build-out, in progress. See [PLAN.md](./PLAN.md) for the full step-by-step delivery plan (14 steps) and design rationale. Currently through **Step 2 — SQLite migrations, WAL-mode client, migration runner**.
+Early build-out, in progress. See [PLAN.md](./PLAN.md) for the full step-by-step delivery plan (14 steps, with a Status column tracking what's done) and design rationale. Currently through **Step 6 — job queue, daemon, worker pool**.
 
 ## How it works
 
