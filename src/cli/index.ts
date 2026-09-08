@@ -1,7 +1,8 @@
 import { Command } from 'commander';
 import { registerCompaniesCommand } from './commands/companies.js';
 import { registerRolesCommand } from './commands/roles.js';
-import { registerRecruitersCommand, registerInterviewNoteCommand } from './commands/recruiters.js';
+import { registerRecruitersCommand } from './commands/recruiters.js';
+import { registerInterviewNoteCommand } from './commands/interview-notes.js';
 import { registerTipsCommand } from './commands/tips.js';
 import { registerRefreshCommand } from './commands/refresh.js';
 import { registerDiscoverCommand } from './commands/discover.js';
