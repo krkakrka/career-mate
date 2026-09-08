@@ -1,5 +1,20 @@
 # career-mate — implementation plan
 
+## Resuming this plan (read first)
+
+If you're picking this up cold — new session, no memory of prior conversation — do this:
+
+1. **Find the next step.** Open the step table under "Delivery process — commitable steps" below and find the first row marked `🔲 Not started`. That's what you're building next. Everything above it should already be `✅ Done`; if a gap looks suspicious (a done step depends on a not-started one), check `git log` before trusting the table.
+2. **Read the commit history for context**, not just this file: `git log --oneline` shows one commit per step (plus the occasional standalone process/fix commit), and each commit *body* documents what was built, why specific decisions were made, and — critically — what the independent review caught and how it was fixed. Skimming the last 3-4 step commits' full messages (`git show <hash>`) before starting is worth it; several steps corrected real concurrency bugs that the next step's code needs to not reintroduce.
+3. **Follow "Delivery process" below exactly** for the next step: write its tests, implement until green, run the independent review (the `code-review` skill, backgrounded), address every finding, re-run tests, commit — and update this file's Status column to `✅ Done` for that row as part of the same commit. Don't skip the review gate; it has caught real bugs (races, silent data corruption, a resource leak) in nearly every step so far, not style nits.
+4. **Don't re-plan from scratch.** The step breakdown, data model, and architecture below are already decided (see "Context" for the why). Only deviate if you hit a genuine contradiction between the plan and what the codebase actually needs — and if you do, update this file to reflect the change, don't just silently diverge from it.
+
+**If this file (`PLAN.md`) is missing or looks wrong:**
+
+1. **Check git first — it's a tracked file, so "missing" usually means "deleted from the working tree, not from history."** Run `git log --all --oneline -- PLAN.md` to find its commits, then `git show <most-recent-hash>:PLAN.md > PLAN.md` to restore the latest version. Do this before attempting to reconstruct anything from scratch.
+2. **If it's genuinely gone from git too** (fresh clone with squashed/missing history, or no `.git` at all), reconstruct it from, in order of authority: (a) `IDEA.md` — the original raw requirements; (b) `git log` commit messages — each step commit documents what was built, the key design decisions behind it, and what review fixes were applied, which is most of what this file's "Context"/"Architecture" sections below capture; (c) `README.md` — a current-state architecture summary; (d) the codebase and its tests as ground truth for what's actually implemented, since code can drift from docs. Rebuild the step table in commit order (each "Step N: ..." commit maps to one row) and mark everything already committed as `✅ Done`.
+3. Once reconstructed, treat it as a draft — sanity-check the "Depends on" column and remaining-step descriptions still make sense against the real codebase before continuing.
+
 ## Context
 
 Job hunting currently means maintaining a spreadsheet by hand: companies, roles, status, salary research, WLB signals — time-consuming and error-prone, and the "soft" research (comp, AI-proofness, work-life balance, interview prep tips) requires manually digging through Glassdoor, Reddit, levels.fyi, etc. The goal is a personal CLI tool that owns this whole pipeline: track companies/roles, auto-enrich them with researched data (including from login-gated sites, via your own authenticated session), score/sort by what actually matters to you, and surface a few decision-support features (staleness, duplicates, recruiter follow-up nudges, reapply cooldowns) so nothing falls through the cracks.
