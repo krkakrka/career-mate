@@ -1,4 +1,5 @@
 import { InvalidArgumentError } from 'commander';
+import { ENTITY_TYPES, type EntityType } from '../domain/entity-type.js';
 import { ROLE_STATUSES, type RoleStatus } from '../domain/role-status.js';
 
 export function parsePositiveInt(value: string): number {
@@ -28,6 +29,13 @@ export function parseHttpUrl(value: string): string {
     throw new InvalidArgumentError(`Expected an http(s) URL, got "${value}"`);
   }
   return value;
+}
+
+export function parseEntityType(value: string): EntityType {
+  if (!(ENTITY_TYPES as readonly string[]).includes(value)) {
+    throw new InvalidArgumentError(`Expected one of ${ENTITY_TYPES.join(', ')}, got "${value}"`);
+  }
+  return value as EntityType;
 }
 
 export function parseRoleStatus(value: string): RoleStatus {
