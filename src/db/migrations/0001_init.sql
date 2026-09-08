@@ -34,11 +34,17 @@ CREATE TABLE roles (
   last_checked_at TEXT,
   last_enriched_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  UNIQUE (company_id, url)
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX idx_roles_company_id ON roles (company_id);
+-- Deliberately not a DB-level UNIQUE(company_id, url): duplicate-role
+-- detection is a --force-overridable application-layer policy (normalized
+-- URL match), not a hard data-integrity invariant a DB constraint could
+-- enforce and still let --force bypass.
+-- Covers both (company_id, url) lookups and plain company_id-only lookups
+-- (company_id is the leading column), so a separate single-column
+-- company_id index would be redundant.
+CREATE INDEX idx_roles_company_url ON roles (company_id, url);
 CREATE INDEX idx_roles_status ON roles (status);
 
 CREATE TABLE role_status_history (
