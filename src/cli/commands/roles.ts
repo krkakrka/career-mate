@@ -11,8 +11,8 @@ import {
   type Role,
 } from '../../db/repositories/roles.js';
 import { ROLE_STATUSES } from '../../domain/role-status.js';
+import { enqueueEnrichment } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
-import { notImplemented } from '../not-implemented.js';
 import {
   parseDate,
   parseHttpUrl,
@@ -25,7 +25,7 @@ const KNOWN_ERRORS = [DuplicateError, NotFoundError];
 
 function printRoleDetail(role: Role): void {
   console.log(`#${role.id} ${role.title ?? '(untitled — not yet fetched)'}`);
-  console.log(`Company: #${role.company_id}`);
+  console.log(`Company: ${role.company_id !== null ? `#${role.company_id}` : '(resolving in the background)'}`);
   console.log(`URL: ${role.url}`);
   console.log(`Status: ${role.status} (since ${role.status_changed_at})`);
   console.log(`Reapply after: ${role.reapply_after ?? '(none)'}`);
@@ -41,15 +41,20 @@ export function registerRolesCommand(program: Command): void {
 
   roles
     .command('add')
-    .description('Add a new role by URL')
+    .description(
+      'Add a new role by URL. Omit --company to have it resolved automatically from the role page.',
+    )
     .argument('<url>', 'Role URL', parseHttpUrl)
-    .requiredOption('--company <id>', 'Company id this role belongs to', parsePositiveInt)
+    .option('--company <id>', 'Company id this role belongs to (auto-resolved from the page if omitted)', parsePositiveInt)
     .option('--force', 'Add even if it looks like a duplicate of an existing role')
-    .action((url: string, opts: { company: number; force?: boolean }) => {
+    .action((url: string, opts: { company?: number; force?: boolean }) => {
       reportKnownErrors(KNOWN_ERRORS, () => {
         const db = getDb();
-        const role = createRole(db, { companyId: opts.company, url, force: opts.force ?? false });
-        console.log(`Added role #${role.id} for company #${role.company_id}: ${role.url}`);
+        const role = createRole(db, { companyId: opts.company ?? null, url, force: opts.force ?? false });
+        enqueueEnrichment(db, { kind: 'role-structural', roleId: role.id });
+        const companyNote =
+          role.company_id !== null ? `company #${role.company_id}` : 'company resolving in the background';
+        console.log(`Added role #${role.id} (${companyNote}): ${role.url}`);
       });
     });
 
@@ -75,9 +80,8 @@ export function registerRolesCommand(program: Command): void {
         return;
       }
       for (const role of rows) {
-        console.log(
-          `#${role.id}  ${role.title ?? '(untitled)'}  company#${role.company_id}  status=${role.status}  ${role.url}`,
-        );
+        const companyLabel = role.company_id !== null ? `company#${role.company_id}` : 'company(pending)';
+        console.log(`#${role.id}  ${role.title ?? '(untitled)'}  ${companyLabel}  status=${role.status}  ${role.url}`);
       }
     });
 
@@ -134,7 +138,18 @@ export function registerRolesCommand(program: Command): void {
     });
 
   roles
-    .command('rerun-enrichment <id>')
-    .description('Manually re-run enrichment for a role')
-    .action(notImplemented('roles rerun-enrichment'));
+    .command('rerun-enrichment')
+    .description('Manually re-run structural-fetch enrichment for a role')
+    .argument('<id>', 'Role id', parsePositiveInt)
+    .action((id: number) => {
+      const db = getDb();
+      const role = getRoleById(db, id);
+      if (!role) {
+        console.error(`Role #${id} not found`);
+        process.exitCode = 1;
+        return;
+      }
+      enqueueEnrichment(db, { kind: 'role-structural', roleId: id });
+      console.log(`Re-enrichment queued for role #${id}.`);
+    });
 }

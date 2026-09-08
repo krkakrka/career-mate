@@ -20,7 +20,7 @@ describe('cm roles', () => {
   it('adds a role under a company and shows it', () => {
     const add = runCli(['roles', 'add', 'https://example.com/jobs/1', '--company', '1'], { dataDir });
     expect(add.exitCode).toBe(0);
-    expect(add.stdout).toContain('Added role #1 for company #1');
+    expect(add.stdout).toContain('Added role #1 (company #1)');
 
     const show = runCli(['roles', 'show', '1'], { dataDir });
     expect(show.exitCode).toBe(0);

@@ -1,6 +1,7 @@
 import { InvalidArgumentError } from 'commander';
 import { ENTITY_TYPES, type EntityType } from '../domain/entity-type.js';
 import { ROLE_STATUSES, type RoleStatus } from '../domain/role-status.js';
+import { isHttpUrl } from '../lib/is-http-url.js';
 
 export function parsePositiveInt(value: string): number {
   const parsed = Number(value);
@@ -19,14 +20,8 @@ export function parseRating(value: string): number {
 }
 
 export function parseHttpUrl(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new InvalidArgumentError(`Expected a valid URL, got "${value}"`);
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new InvalidArgumentError(`Expected an http(s) URL, got "${value}"`);
+  if (!isHttpUrl(value)) {
+    throw new InvalidArgumentError(`Expected a valid http(s) URL, got "${value}"`);
   }
   return value;
 }

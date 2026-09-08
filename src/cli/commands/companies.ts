@@ -9,6 +9,7 @@ import {
   setPreferenceRating,
   type Company,
 } from '../../db/repositories/companies.js';
+import { enqueueEnrichment } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
 import { parseHttpUrl, parsePositiveInt, parseRating } from '../parsers.js';
 
@@ -37,7 +38,8 @@ export function registerCompaniesCommand(program: Command): void {
       reportKnownErrors(KNOWN_ERRORS, () => {
         const db = getDb();
         const company = createCompany(db, url);
-        console.log(`Added company #${company.id}: ${company.url}`);
+        enqueueEnrichment(db, { kind: 'company-structural', companyId: company.id });
+        console.log(`Added company #${company.id}: ${company.url} (fetching details in the background)`);
       });
     });
 
