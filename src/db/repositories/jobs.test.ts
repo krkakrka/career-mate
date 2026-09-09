@@ -4,6 +4,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../client.js';
+import { InvalidStateError, NotFoundError } from '../errors.js';
 import {
   claimNextJob,
   completeJob,
@@ -124,6 +125,15 @@ describe('listJobs / retryFailedJob', () => {
     expect(retried.status).toBe('pending');
     expect(retried.attempts).toBe(0);
     expect(retried.error).toBeNull();
+  });
+
+  it('rejects retrying a job that is not in failed status, with a typed (not plain) error', () => {
+    const job = enqueueJob(db, { topic: 'notification' }); // stays 'pending'
+    expect(() => retryFailedJob(db, job.id)).toThrow(InvalidStateError);
+  });
+
+  it('rejects retrying an unknown job id, with a typed (not plain) error', () => {
+    expect(() => retryFailedJob(db, 999)).toThrow(NotFoundError);
   });
 });
 

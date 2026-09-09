@@ -67,4 +67,15 @@ describe('cm worker jobs / failed / retry', () => {
     expect(result.stderr).toMatch(/job #999 not found/i);
     expect(result.stderr).not.toMatch(/\bat\s+\S+\s+\(/);
   });
+
+  it('rejects retrying a job that is not in failed status, cleanly (not a raw crash)', () => {
+    const db = openDb(dbPath);
+    const job = enqueueJob(db, { topic: 'notification' }); // stays pending
+    db.close();
+
+    const result = runCli(['worker', 'retry', String(job.id)], { dataDir });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(new RegExp(`job #${job.id} is pending, not failed`, 'i'));
+    expect(result.stderr).not.toMatch(/\bat\s+\S+\s+\(/);
+  });
 });

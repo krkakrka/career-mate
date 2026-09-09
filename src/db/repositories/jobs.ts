@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { inferJobEntity } from '../../domain/job-entity.js';
 import type { JobTopic } from '../../domain/job-topic.js';
-import { NotFoundError } from '../errors.js';
+import { InvalidStateError, NotFoundError } from '../errors.js';
 import { sanitizeOperationalError, tryRecordOperationalLog } from './operational-logs.js';
 
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -183,7 +183,7 @@ export function listJobs(db: Database.Database, filters: JobFilters = {}): JobRe
 export function retryFailedJob(db: Database.Database, id: number): JobRecord {
   const job = getJobById(db, id);
   if (!job) throw new NotFoundError(`Job #${id} not found`);
-  if (job.status !== 'failed') throw new Error(`Job #${id} is ${job.status}, not failed`);
+  if (job.status !== 'failed') throw new InvalidStateError(`Job #${id} is ${job.status}, not failed`);
   db.prepare(
     "UPDATE jobs SET status = 'pending', attempts = 0, error = NULL, available_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
   ).run(id);

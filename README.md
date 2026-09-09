@@ -9,16 +9,16 @@ Job hunting means tracking a lot of moving pieces: which companies you're target
 - Tracks companies and roles with full status history.
 - Auto-fetches company/role details from a URL when you add them.
 - Enriches roles and companies with researched data — compensation, equity, IPO status, remote/EU availability, AI-proofness, and work-life balance.
-- Periodically re-checks saved role URLs and flags closures.
+- On-demand `cm refresh`/`cm discover`: re-checks saved role URLs for closure, and scans tracked companies for new matching roles.
 - Scores and ranks roles by a weighted priority formula tuned to your own preferences.
-- Surfaces decision-support nudges: stale roles, overdue recruiter follow-ups, reapply cooldowns, duplicate detection.
+- Surfaces decision-support nudges via `cm status`: stale roles, overdue recruiter follow-ups, reapply cooldowns, duplicate detection.
 - Generates on-demand, cited "tips" research (interview prep, culture, comp) per company or role.
 
-Every action and periodic job is timestamped and logged for later debugging.
+Every CLI action, daemon event, and job's full lifecycle is durably logged (`cm logs`, `cm worker jobs/failed/retry`) for later debugging, with secrets and raw page content redacted before they ever reach storage.
 
 ## Status
 
-Early build-out, in progress. See [PLAN.md](./PLAN.md) for the full step-by-step delivery plan (13 steps, with a Status column tracking what's done) and design rationale. Currently through **Step 10 — recruiter tracking + interview notes**. Requires `npx playwright install chromium` once after `npm install` (not yet wired as an automatic postinstall step).
+All 14 planned steps are built. See [PLAN.md](./PLAN.md) for the full step-by-step delivery plan (with a Status column) and design rationale — each step's row documents what was built, why, and what independent review caught along the way. Requires `npx playwright install chromium` once after `npm install` (not yet wired as an automatic postinstall step — WLB research and other login-gated sources need it; everything else works without it).
 
 ## How it works
 
@@ -34,7 +34,7 @@ CLI (thin client) → SQLite → Daemon → Worker pool → Enrichment scripts �
 
 All data lives under `.data/` (gitignored): the SQLite database, the browser profile, and per-role reference files (CVs, application answers).
 
-## Planned commands
+## Commands
 
 ```
 cm companies add/list/show/set-preference/set-connections
@@ -42,20 +42,21 @@ cm roles add/list/show/set-status/set-reapply
 cm recruiters ping/respond/list
 cm interview-note add
 cm tips <role-id>
-cm refresh
-cm discover
-cm status
+cm refresh                 # re-check tracked roles for closure (fire-and-forget)
+cm discover                # scan tracked companies for new matching roles (fire-and-forget)
+cm status                  # pipeline digest: counts, stale roles, overdue follow-ups, reapply dates
 cm auth login-browser
 cm inbox / cm inbox ack
 cm events <id>
-cm daemon / cm worker
+cm logs                    # durable CLI/daemon/job diagnostics, with filtering and --follow
+cm daemon / cm worker      # worker jobs/failed/retry/drain/status
 ```
 
-Explicitly out of scope for this build: CV/PDF generation, and scheduled (launchd) periodic runs — `refresh`/`discover` are manual-only for now.
+Explicitly out of scope for this build: CV/PDF generation, and scheduled (launchd) periodic runs — `refresh`/`discover` are manual-only, triggered by you.
 
 ## Data model
 
-SQLite tables: `companies`, `roles`, `role_status_history`, `role_references`, `tips`, `recruiter_contacts`, `interview_notes`, `events` (immutable audit log), `notifications`, `jobs` (the job queue). (Named `role_references`, not `references` — the latter is a SQL keyword.)
+SQLite tables: `companies`, `roles`, `role_status_history`, `role_references`, `tips`, `recruiter_contacts`, `interview_notes`, `events` (immutable audit log), `notifications`, `jobs` (the job queue), `operational_logs` (CLI/daemon/job diagnostics, `cm logs`). (Named `role_references`, not `references` — the latter is a SQL keyword.)
 
 Hand-tuned config lives in `src/config/*.json`: `preferences.json` (role-matching filters), `scoring.json` (priority-score weights), `settings.json` (nudge/staleness thresholds), and `src/enrichment/sources.json` (per-data-source fetch recipes).
 
@@ -68,6 +69,16 @@ npm install
 npm test           # run tests (vitest)
 npm run test:watch
 npm run typecheck  # tsc --noEmit
+```
+
+No build step — `cm` runs the TypeScript source directly via `tsx` (see `bin/cm.js`).
+
+To run `cm` from anywhere instead of `npx tsx bin/cm.js ...` inside the project directory:
+
+```bash
+npm link      # once, from the project root — installs the `cm` bin globally, symlinked to this checkout
+cm --help     # now works from any directory
+npm unlink -g career-mate   # to undo
 ```
 
 **Stack**: TypeScript (Node, ESM) + `better-sqlite3` + `commander`. Tests use [Vitest](https://vitest.dev), primarily black-box: invoking the built `cm` binary against an isolated temp `.data` directory and asserting on stdout/exit code/DB state.
@@ -85,6 +96,9 @@ career-mate/
     enrichment/     # claude-CLI-backed extraction scripts + source recipes
     browser/        # Playwright persistent-profile helpers
     scoring/         # priority score calculation
+    reporting/       # cm status's pipeline digest query logic
+    domain/          # small, pure, cross-cutting types/logic (job topics, entity
+                      # correlation, preference matching) shared by the CLI and daemon
     notify/          # terminal / macOS notifications
     config/          # preferences, scoring weights, settings
   .data/            # gitignored — db, browser profile, reference files

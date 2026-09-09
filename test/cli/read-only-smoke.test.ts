@@ -127,6 +127,22 @@ describe('read-only commands against seeded data', () => {
   });
 });
 
+describe('cross-option validation errors fail cleanly, not with a raw crash', () => {
+  it('logs --entity without --id', () => {
+    const result = runCli(['logs', '--entity', 'role'], { dataDir });
+    expectNoRawCrash(result);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--entity and --id must be used together');
+  });
+
+  it('logs --id without --entity', () => {
+    const result = runCli(['logs', '--id', '1'], { dataDir });
+    expectNoRawCrash(result);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--entity and --id must be used together');
+  });
+});
+
 describe('invoking cm from outside the project directory', () => {
   it('direct path invocation (node bin/cm.js) works regardless of cwd, unlike bare `npx cm`', () => {
     // Spawned with cwd = a temp dir *outside* the project, not runCli's

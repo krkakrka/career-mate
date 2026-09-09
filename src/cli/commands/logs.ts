@@ -25,7 +25,11 @@ export function registerLogsCommand(program: Command): void {
     .option('--limit <count>', 'Maximum rows (default 100)', parsePositiveInt)
     .option('--follow', 'Continue printing new records')
     .action(async (opts: { severity?: LogSeverity; component?: string; action?: string; entity?: string; id?: number; job?: number; limit?: number; follow?: boolean }) => {
-      if ((opts.entity && !opts.id) || (!opts.entity && opts.id)) throw new Error('--entity and --id must be used together');
+      if ((opts.entity && !opts.id) || (!opts.entity && opts.id)) {
+        console.error('--entity and --id must be used together');
+        process.exitCode = 1;
+        return;
+      }
       const db = getDb();
       const filters: OperationalLogFilters = {
         severity: opts.severity,

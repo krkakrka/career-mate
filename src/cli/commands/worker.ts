@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 import { getDb } from '../../db/client.js';
 import { countJobsByStatus, listJobs, retryFailedJob, type JobStatus } from '../../db/repositories/jobs.js';
 import { sanitizeOperationalValue } from '../../db/repositories/operational-logs.js';
-import { NotFoundError } from '../../db/errors.js';
+import { InvalidStateError, NotFoundError } from '../../db/errors.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
 import { parsePositiveInt } from '../parsers.js';
 import { buildHandlerRegistry, DEFAULT_TOPIC_CONCURRENCY } from '../../daemon/handlers/index.js';
@@ -63,7 +63,7 @@ export function registerWorkerCommand(program: Command): void {
     .description('Retry a terminally failed job')
     .argument('<id>', 'Job id', parsePositiveInt)
     .action((id: number) => {
-      reportKnownErrors([NotFoundError], () => {
+      reportKnownErrors([NotFoundError, InvalidStateError], () => {
         const job = retryFailedJob(getDb(), id);
         console.log(`Job #${job.id} re-queued.`);
       });
