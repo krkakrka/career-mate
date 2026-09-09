@@ -53,6 +53,10 @@ const EMPTY_STATE_CASES: SmokeCase[] = [
   { name: 'worker status', args: ['worker', 'status'], expectExitCode: 0 },
   { name: 'recruiters list', args: ['recruiters', 'list'], expectExitCode: 0 },
   { name: 'recruiters list --overdue', args: ['recruiters', 'list', '--overdue'], expectExitCode: 0 },
+  { name: 'status', args: ['status'], expectExitCode: 0 },
+  { name: 'worker jobs', args: ['worker', 'jobs'], expectExitCode: 0 },
+  { name: 'worker failed', args: ['worker', 'failed'], expectExitCode: 0 },
+  { name: 'logs', args: ['logs'], expectExitCode: 0 },
 ];
 
 describe('read-only commands against an empty database', () => {
@@ -88,6 +92,9 @@ describe('read-only commands against seeded data', () => {
     { name: 'worker status', args: ['worker', 'status'], expectExitCode: 0 },
     { name: 'recruiters list', args: ['recruiters', 'list'], expectExitCode: 0 },
     { name: 'recruiters list --role', args: ['recruiters', 'list', '--role', '1'], expectExitCode: 0 },
+    { name: 'status', args: ['status'], expectExitCode: 0 },
+    { name: 'worker jobs', args: ['worker', 'jobs'], expectExitCode: 0 },
+    { name: 'logs', args: ['logs'], expectExitCode: 0 },
   ];
 
   for (const testCase of SEEDED_STATE_CASES) {

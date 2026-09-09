@@ -38,13 +38,3 @@ describe('cm --version', () => {
     expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
-
-describe('an unimplemented stub command', () => {
-  it('fails clearly instead of silently succeeding', () => {
-    // `status` has no implementation yet as of this step — pick whichever
-    // command is still a stub rather than one this suite exercises for real.
-    const result = runCli(['status']);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('not yet implemented');
-  });
-});
