@@ -1,6 +1,8 @@
 import type { Command } from 'commander';
 import { getDb } from '../../db/client.js';
 import { DuplicateError, NotFoundError } from '../../db/errors.js';
+import { listInterviewNotes } from '../../db/repositories/interview-notes.js';
+import { listRecruiterContacts } from '../../db/repositories/recruiter-contacts.js';
 import {
   createRole,
   getRoleById,
@@ -108,6 +110,23 @@ export function registerRolesCommand(program: Command): void {
         for (const entry of history) {
           const note = entry.context ? `  (${entry.context})` : '';
           console.log(`  ${entry.changed_at}  ${entry.from_status ?? '(none)'} -> ${entry.to_status}${note}`);
+        }
+      }
+
+      const contacts = listRecruiterContacts(db, { roleId: id });
+      if (contacts.length > 0) {
+        console.log('\nRecruiter contacts:');
+        for (const contact of contacts) {
+          const responded = contact.responded_at ? `  (responded ${contact.responded_at})` : '  (no response yet)';
+          console.log(`  ${contact.contacted_at}  ${contact.recruiter_name}${responded}`);
+        }
+      }
+
+      const notes = listInterviewNotes(db, id);
+      if (notes.length > 0) {
+        console.log('\nInterview notes:');
+        for (const note of notes) {
+          console.log(`  ${note.occurred_at}  [${note.stage}] ${note.notes}`);
         }
       }
     });
