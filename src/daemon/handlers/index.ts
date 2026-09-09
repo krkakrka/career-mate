@@ -1,20 +1,19 @@
 import type Database from 'better-sqlite3';
 import type { JobTopic } from '../../domain/job-topic.js';
 import type { JobHandler } from '../worker-pool.js';
+import { handleDiscoveryJob } from './discover.js';
 import { handleEnrichmentJob } from './enrichment.js';
 import { handleNotificationJob } from './notification.js';
+import { handleRefreshJob } from './refresh.js';
 import { handleTipsJob } from './tips.js';
 
-/**
- * The live handler registry. Topics with no entry here (refresh, discovery
- * as of this step) are simply not drained yet — nothing enqueues jobs for
- * them until the step that builds their producer.
- */
 export function buildHandlerRegistry(db: Database.Database): Partial<Record<JobTopic, JobHandler>> {
   return {
     notification: (job) => handleNotificationJob(db, job),
     enrichment: (job) => handleEnrichmentJob(db, job),
     tips: (job) => handleTipsJob(db, job),
+    refresh: (job) => handleRefreshJob(db, job),
+    discovery: (job) => handleDiscoveryJob(db, job),
   };
 }
 

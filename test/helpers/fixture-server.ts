@@ -6,18 +6,25 @@ export interface FixtureServer {
   close: () => Promise<void>;
 }
 
-/** Starts a tiny local HTTP server serving fixed HTML per path — the deterministic stand-in for a real site in fetch-dependent tests. */
-export function startFixtureServer(routes: Record<string, string>): Promise<FixtureServer> {
+export type FixtureRoute = string | { status: number; body?: string };
+
+/** Starts a tiny local HTTP server serving fixed HTML (or a custom status, e.g. to test a non-200/404 response) per path — the deterministic stand-in for a real site in fetch-dependent tests. */
+export function startFixtureServer(routes: Record<string, FixtureRoute>): Promise<FixtureServer> {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
-      const body = routes[req.url ?? ''];
-      if (body === undefined) {
+      const route = routes[req.url ?? ''];
+      if (route === undefined) {
         res.writeHead(404, { 'content-type': 'text/plain' });
         res.end('not found');
         return;
       }
-      res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(body);
+      if (typeof route === 'string') {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(route);
+        return;
+      }
+      res.writeHead(route.status, { 'content-type': 'text/plain' });
+      res.end(route.body ?? '');
     });
 
     server.on('error', reject);

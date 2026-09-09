@@ -2,9 +2,13 @@ const FETCH_TIMEOUT_MS = 15_000;
 const MAX_CONTENT_LENGTH = 500_000; // ~500KB of HTML is already generous input for extraction; truncate beyond that
 
 export class FetchError extends Error {
-  constructor(message: string) {
+  /** The HTTP status code, when the failure was a non-ok response (vs. a network-level failure, where this is undefined). */
+  readonly status: number | undefined;
+
+  constructor(message: string, status?: number) {
     super(message);
     this.name = 'FetchError';
+    this.status = status;
   }
 }
 
@@ -31,7 +35,7 @@ export async function fetchPageContent(url: string): Promise<string> {
   }
 
   if (!response.ok) {
-    throw new FetchError(`Failed to fetch ${url}: HTTP ${response.status}`);
+    throw new FetchError(`Failed to fetch ${url}: HTTP ${response.status}`, response.status);
   }
 
   const html = await response.text();

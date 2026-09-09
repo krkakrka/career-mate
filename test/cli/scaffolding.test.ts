@@ -41,9 +41,9 @@ describe('cm --version', () => {
 
 describe('an unimplemented stub command', () => {
   it('fails clearly instead of silently succeeding', () => {
-    // `refresh` has no implementation yet as of this step — pick whichever
+    // `status` has no implementation yet as of this step — pick whichever
     // command is still a stub rather than one this suite exercises for real.
-    const result = runCli(['refresh']);
+    const result = runCli(['status']);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('not yet implemented');
   });

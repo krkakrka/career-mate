@@ -58,6 +58,17 @@ export function listRoleIdsForCompany(db: Database.Database, companyId: number):
   );
 }
 
+/** Active-status roles not yet known closed — what `cm refresh` checks. Terminal-status roles (success/denied/skip) don't need closure checking. */
+export function listRoleIdsNeedingClosureCheck(db: Database.Database): number[] {
+  return (
+    db
+      .prepare(
+        `SELECT id FROM roles WHERE closed_at IS NULL AND status IN (${ACTIVE_ROLE_STATUSES.map(() => '?').join(', ')})`,
+      )
+      .all(...ACTIVE_ROLE_STATUSES) as { id: number }[]
+  ).map((row) => row.id);
+}
+
 function requireRole(db: Database.Database, id: number): Role {
   const role = getRoleById(db, id);
   if (!role) throw new NotFoundError(`Role #${id} not found`);
@@ -261,4 +272,30 @@ export function updateResearchFields(
      WHERE id = ?`,
   ).run(fields.salaryMin ?? null, fields.salaryMax ?? null, fields.equity ?? null, fields.remoteEu ?? null, roleId);
   return requireRole(db, roleId);
+}
+
+/** Stamps last_checked_at — call after every refresh attempt, regardless of outcome, so "when did we last check" is always accurate. */
+export function markLastChecked(db: Database.Database, roleId: number): Role {
+  requireRole(db, roleId);
+  db.prepare(
+    "UPDATE roles SET last_checked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+  ).run(roleId);
+  return requireRole(db, roleId);
+}
+
+export interface MarkClosedResult {
+  role: Role;
+  /** Whether *this* call was the one that closed it — mirrors attachCompanyIfUnresolved's race-guard pattern. Two overlapping closure checks for the same role (e.g. two `cm refresh` runs, or `cm worker drain` alongside the live daemon) can both read `closed_at IS NULL` before either writes; only the call whose UPDATE actually matched should record the closure event/notification, or a single real closure double-fires both. */
+  wasNewlyClosed: boolean;
+}
+
+/** Idempotent: only sets closed_at if it isn't already set, so re-checking an already-closed role doesn't overwrite when it was first detected as closed. */
+export function markClosed(db: Database.Database, roleId: number): MarkClosedResult {
+  requireRole(db, roleId);
+  const result = db
+    .prepare(
+      "UPDATE roles SET closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND closed_at IS NULL",
+    )
+    .run(roleId);
+  return { role: requireRole(db, roleId), wasNewlyClosed: result.changes > 0 };
 }
