@@ -18,7 +18,7 @@ Every action and periodic job is timestamped and logged for later debugging.
 
 ## Status
 
-Early build-out, in progress. See [PLAN.md](./PLAN.md) for the full step-by-step delivery plan (13 steps, with a Status column tracking what's done) and design rationale. Currently through **Step 7 — structural fetch enrichment**.
+Early build-out, in progress. See [PLAN.md](./PLAN.md) for the full step-by-step delivery plan (13 steps, with a Status column tracking what's done) and design rationale. Currently through **Step 8 — browser automation, full enrichment, priority scoring**. Requires `npx playwright install chromium` once after `npm install` (not yet wired as an automatic postinstall step).
 
 ## How it works
 

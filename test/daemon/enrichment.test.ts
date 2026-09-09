@@ -6,6 +6,7 @@ import { openDb } from '../../src/db/client.js';
 import { createCompany, findCompanyByUrl, getCompanyById } from '../../src/db/repositories/companies.js';
 import { getRoleById } from '../../src/db/repositories/roles.js';
 import { startFixtureServer, type FixtureServer } from '../helpers/fixture-server.js';
+import { killDaemon } from '../helpers/kill-daemon.js';
 import { runCli } from '../helpers/run-cli.js';
 
 // Generous: a claude -p call is normally ~2-4s, but observed latency varies
@@ -26,20 +27,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  const pidPath = path.join(dataDir, 'daemon.pid');
-  try {
-    const pid = Number(fs.readFileSync(pidPath, 'utf-8').trim());
-    if (Number.isInteger(pid) && pid > 0) {
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch {
-        // already gone.
-      }
-    }
-  } catch {
-    // no pid file.
-  }
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await killDaemon(dataDir);
   fs.rmSync(dataDir, { recursive: true, force: true });
   await server?.close();
 });
@@ -140,6 +128,59 @@ describe('structural-fetch enrichment (live claude -p, local fixture server)', (
       expect(company.description).toBeTruthy();
     },
     TEST_TIMEOUT_MS,
+  );
+
+  // This one waits through a 4-deep sequential live-call chain
+  // (role-structural -> company-structural -> role-research ->
+  // company-research, enrichment concurrency=1 so strictly serial) before
+  // ipo_status becomes available. Per-call latency observed as high as
+  // ~18-20s even with no error/retry — 4 calls worst-case can comfortably
+  // exceed 80s, which is what actually failed here during development (not
+  // a code bug: company-structural had already completed correctly by
+  // then, the chain was just still working through the remaining jobs).
+  // Budgeted generously rather than re-guessing a tighter number.
+  const CHAIN_TEST_TIMEOUT_MS = 240_000;
+
+  it(
+    'role-research and company-research find real, grounded data for a real company (not fabricated from trained knowledge)',
+    async () => {
+      const routes: Record<string, string> = {};
+      server = await startFixtureServer(routes);
+      routes['/jobs/stripe-swe'] = `<html><body>
+        <h1>Software Engineer, Payments Infrastructure</h1>
+        <p>Stripe is hiring a Software Engineer to work on core payments infrastructure.</p>
+        <p>Company homepage: https://stripe.com</p>
+      </body></html>`;
+
+      const add = runCli(['roles', 'add', `${server.url}/jobs/stripe-swe`], {
+        dataDir,
+        allowDaemonAutostart: true,
+      });
+      expect(add.exitCode).toBe(0);
+
+      const company = await pollUntil(
+        () => {
+          const db = openDb(dbPath);
+          const role = getRoleById(db, 1);
+          if (!role?.company_id) return undefined;
+          const row = getCompanyById(db, role.company_id);
+          db.close();
+          return row;
+        },
+        (row) => row?.ipo_status != null,
+        200_000,
+      );
+
+      // Stripe has been reliably, publicly private for years — a real
+      // grounded lookup should say so; a fabricated answer is just as
+      // likely to guess "public" given Stripe's prominence, which is
+      // exactly the failure mode --allowedTools WebSearch exists to
+      // prevent (confirmed empirically during development: without it,
+      // claude -p silently answers from trained knowledge with a
+      // fabricated source).
+      expect(company.ipo_status?.toLowerCase()).toContain('private');
+    },
+    CHAIN_TEST_TIMEOUT_MS,
   );
 
   it(

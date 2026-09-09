@@ -138,3 +138,37 @@ export function updateStructuralFields(
   ).run(fields.name ?? null, fields.description ?? null, id);
   return requireCompany(db, id);
 }
+
+export interface UpdateCompanyResearchFieldsParams {
+  ipoStatus?: string | null;
+  aiProofScore?: number | null;
+  aiProofNotes?: string | null;
+  wlbScore?: number | null;
+  wlbNotes?: string | null;
+}
+
+/** Applies full-enrichment research results (IPO status, AI-proofness, WLB) and stamps last_enriched_at. */
+export function updateResearchFields(
+  db: Database.Database,
+  id: number,
+  fields: UpdateCompanyResearchFieldsParams,
+): Company {
+  requireCompany(db, id);
+  db.prepare(
+    `UPDATE companies
+     SET ipo_status = COALESCE(?, ipo_status), ai_proof_score = COALESCE(?, ai_proof_score),
+         ai_proof_notes = COALESCE(?, ai_proof_notes), wlb_score = COALESCE(?, wlb_score),
+         wlb_notes = COALESCE(?, wlb_notes),
+         last_enriched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(
+    fields.ipoStatus ?? null,
+    fields.aiProofScore ?? null,
+    fields.aiProofNotes ?? null,
+    fields.wlbScore ?? null,
+    fields.wlbNotes ?? null,
+    id,
+  );
+  return requireCompany(db, id);
+}

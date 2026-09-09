@@ -6,8 +6,24 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../../db/client.js';
 import { createCompany, getCompanyById, listCompanies } from '../../db/repositories/companies.js';
 import { listEventsForEntity } from '../../db/repositories/events.js';
+import type { JobRecord } from '../../db/repositories/jobs.js';
 import { createRole, getRoleById } from '../../db/repositories/roles.js';
-import { resolveRoleCompany } from './enrichment.js';
+import { handleEnrichmentJob, resolveRoleCompany } from './enrichment.js';
+
+function fakeJob(payload: unknown): JobRecord {
+  return {
+    id: 1,
+    topic: 'enrichment',
+    payload: JSON.stringify(payload),
+    status: 'running',
+    priority: 0,
+    attempts: 0,
+    available_at: new Date().toISOString(),
+    error: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
 
 let tempDir: string;
 let db: Database.Database;
@@ -87,5 +103,27 @@ describe('resolveRoleCompany', () => {
 
     const events = listEventsForEntity(db, 'role', role.id);
     expect(events.some((e) => e.type === 'role.company_resolution_lost_race')).toBe(true);
+  });
+});
+
+describe('company-wlb job — no urlTemplate configured (the shipped default)', () => {
+  it('skips gracefully with a clear event instead of attempting doomed browser automation, no live calls', async () => {
+    const company = createCompany(db, 'https://acme.example.com', 'Acme');
+
+    // No live claude -p / Playwright call should happen here at all — WLB
+    // is login-gated, so without a real urlTemplate in sources.json there
+    // is nothing reachable to research. This must stay fast and free.
+    const start = Date.now();
+    await handleEnrichmentJob(db, fakeJob({ kind: 'company-wlb', companyId: company.id }));
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1000);
+
+    const updated = getCompanyById(db, company.id)!;
+    expect(updated.wlb_score).toBeNull();
+
+    const events = listEventsForEntity(db, 'company', company.id);
+    const skipped = events.find((e) => e.type === 'company.wlb_skipped');
+    expect(skipped).toBeDefined();
+    expect(JSON.parse(skipped!.context!).reason).toMatch(/urlTemplate/);
   });
 });

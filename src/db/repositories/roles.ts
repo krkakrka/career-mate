@@ -51,6 +51,13 @@ export function getRoleById(db: Database.Database, id: number): Role | undefined
   return db.prepare('SELECT * FROM roles WHERE id = ?').get(id) as Role | undefined;
 }
 
+/** Every role id at a company, regardless of status — used by priority-score recompute cascades, not general listing (which defaults to active statuses only). */
+export function listRoleIdsForCompany(db: Database.Database, companyId: number): number[] {
+  return (db.prepare('SELECT id FROM roles WHERE company_id = ?').all(companyId) as { id: number }[]).map(
+    (row) => row.id,
+  );
+}
+
 function requireRole(db: Database.Database, id: number): Role {
   const role = getRoleById(db, id);
   if (!role) throw new NotFoundError(`Role #${id} not found`);
@@ -229,4 +236,29 @@ export function setReapplyAfter(db: Database.Database, id: number, isoDate: stri
     "UPDATE roles SET reapply_after = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
   ).run(isoDate, id);
   return requireRole(db, id);
+}
+
+export interface UpdateRoleResearchFieldsParams {
+  salaryMin?: number | null;
+  salaryMax?: number | null;
+  equity?: string | null;
+  remoteEu?: 'yes' | 'no' | 'unknown' | null;
+}
+
+/** Applies full-enrichment research results (comp/equity/remote-EU) and stamps last_enriched_at. */
+export function updateResearchFields(
+  db: Database.Database,
+  roleId: number,
+  fields: UpdateRoleResearchFieldsParams,
+): Role {
+  requireRole(db, roleId);
+  db.prepare(
+    `UPDATE roles
+     SET salary_min = COALESCE(?, salary_min), salary_max = COALESCE(?, salary_max),
+         equity = COALESCE(?, equity), remote_eu = COALESCE(?, remote_eu),
+         last_enriched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(fields.salaryMin ?? null, fields.salaryMax ?? null, fields.equity ?? null, fields.remoteEu ?? null, roleId);
+  return requireRole(db, roleId);
 }

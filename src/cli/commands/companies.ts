@@ -9,6 +9,7 @@ import {
   setPreferenceRating,
   type Company,
 } from '../../db/repositories/companies.js';
+import { recomputePriorityForCompanyRoles } from '../../scoring/priority.js';
 import { enqueueEnrichment } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
 import { parseHttpUrl, parsePositiveInt, parseRating } from '../parsers.js';
@@ -22,8 +23,8 @@ function printCompanyDetail(company: Company): void {
   console.log(`Preference rating: ${company.preference_rating}`);
   console.log(`Connections: ${company.connections ?? '(none)'}`);
   console.log(`IPO status: ${company.ipo_status ?? '(unknown)'}`);
-  console.log(`AI-proof score: ${company.ai_proof_score ?? '(unknown)'}`);
-  console.log(`WLB score: ${company.wlb_score ?? '(unknown)'}`);
+  console.log(`AI-proof score: ${company.ai_proof_score ?? '(unknown)'}${company.ai_proof_notes ? `  — ${company.ai_proof_notes}` : ''}`);
+  console.log(`WLB score: ${company.wlb_score ?? '(unknown)'}${company.wlb_notes ? `  — ${company.wlb_notes}` : ''}`);
   console.log(`Created: ${company.created_at}`);
 }
 
@@ -84,6 +85,7 @@ export function registerCompaniesCommand(program: Command): void {
       reportKnownErrors(KNOWN_ERRORS, () => {
         const db = getDb();
         const company = setPreferenceRating(db, id, rating);
+        recomputePriorityForCompanyRoles(db, id);
         console.log(`Company #${company.id} preference rating set to ${company.preference_rating}`);
       });
     });
@@ -99,5 +101,21 @@ export function registerCompaniesCommand(program: Command): void {
         const company = setConnections(db, id, note);
         console.log(`Company #${company.id} connections note updated`);
       });
+    });
+
+  companies
+    .command('rerun-enrichment')
+    .description('Manually re-run structural fetch + full research for a company')
+    .argument('<id>', 'Company id', parsePositiveInt)
+    .action((id: number) => {
+      const db = getDb();
+      const company = getCompanyById(db, id);
+      if (!company) {
+        console.error(`Company #${id} not found`);
+        process.exitCode = 1;
+        return;
+      }
+      enqueueEnrichment(db, { kind: 'company-structural', companyId: id });
+      console.log(`Re-enrichment queued for company #${id}.`);
     });
 }

@@ -81,7 +81,10 @@ export function registerRolesCommand(program: Command): void {
       }
       for (const role of rows) {
         const companyLabel = role.company_id !== null ? `company#${role.company_id}` : 'company(pending)';
-        console.log(`#${role.id}  ${role.title ?? '(untitled)'}  ${companyLabel}  status=${role.status}  ${role.url}`);
+        const priorityLabel = role.priority_score != null ? `priority=${role.priority_score.toFixed(2)}` : 'priority=?';
+        console.log(
+          `#${role.id}  ${role.title ?? '(untitled)'}  ${companyLabel}  status=${role.status}  ${priorityLabel}  ${role.url}`,
+        );
       }
     });
 

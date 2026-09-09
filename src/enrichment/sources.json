@@ -1,0 +1,17 @@
+{
+  "role_research": {
+    "requiresLogin": false,
+    "urlTemplate": null,
+    "instructions": "Research compensation (base salary min/max, equity) primarily via levels.fyi and similar public sources, and determine remote/EU eligibility from the role context given. Use publicly available information only."
+  },
+  "company_research": {
+    "requiresLogin": false,
+    "urlTemplate": null,
+    "instructions": "Research whether this company has IPO'd, is private, or is reportedly planning to IPO, and assess how AI-proof / future-proof the company and its work seem, based on recent news, its industry, and public sentiment. Use publicly available information only."
+  },
+  "company_wlb": {
+    "requiresLogin": true,
+    "urlTemplate": null,
+    "instructions": "Extract a work-life-balance assessment from Glassdoor reviews (or a similar login-gated source) for this company: overall sentiment on hours, burnout, and culture, distilled to a 0-1 score and a short summary."
+  }
+}
