@@ -136,7 +136,11 @@ describe('0002_nullable_role_company migration', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     const rows = db.prepare('SELECT id FROM _migrations').all() as { id: string }[];
-    expect(rows.map((r) => r.id).sort()).toEqual(['0001_init.sql', '0002_nullable_role_company.sql']);
+    expect(rows.map((r) => r.id).sort()).toEqual([
+      '0001_init.sql',
+      '0002_nullable_role_company.sql',
+      '0003_operational_logs.sql',
+    ]);
     db.close();
   });
 });

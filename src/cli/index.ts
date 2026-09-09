@@ -11,6 +11,8 @@ import { registerAuthCommand } from './commands/auth.js';
 import { registerDaemonCommand } from './commands/daemon.js';
 import { registerWorkerCommand } from './commands/worker.js';
 import { registerEventsCommand } from './commands/events.js';
+import { registerLogsCommand } from './commands/logs.js';
+import { installCliOperationalLogging } from './operational-logging.js';
 
 const program = new Command();
 
@@ -31,5 +33,22 @@ registerAuthCommand(program);
 registerDaemonCommand(program);
 registerWorkerCommand(program);
 registerEventsCommand(program);
+registerLogsCommand(program);
+installCliOperationalLogging(program);
 
-await program.parseAsync(process.argv);
+try {
+  await program.parseAsync(process.argv);
+} catch (error) {
+  // Commander hooks cannot observe a rejected action; leave a best-effort
+  // process-level record before preserving the original failure semantics.
+  // Guarded so a *secondary* failure here (e.g. the DB itself is what's
+  // broken) can never replace or mask the original error rethrown below.
+  try {
+    const { getDb } = await import('../db/client.js');
+    const { tryRecordOperationalLog } = await import('../db/repositories/operational-logs.js');
+    tryRecordOperationalLog(getDb(), { severity: 'error', outcome: 'failed', component: 'cli', action: 'unhandled-action', error });
+  } catch {
+    // best-effort only — the original error below is what matters.
+  }
+  throw error;
+}

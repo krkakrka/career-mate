@@ -17,6 +17,7 @@ const EXPECTED_TABLES = [
   'events',
   'notifications',
   'jobs',
+  'operational_logs',
 ];
 
 let tempDir: string;

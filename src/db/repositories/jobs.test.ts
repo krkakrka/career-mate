@@ -11,6 +11,8 @@ import {
   enqueueJob,
   failJob,
   getJobById,
+  listJobs,
+  retryFailedJob,
 } from './jobs.js';
 
 let tempDir: string;
@@ -109,6 +111,19 @@ describe('failJob', () => {
     expect(final.attempts).toBe(2);
     expect(final.error).toBe('boom 2');
     expect(claimNextJob(db, 'notification')).toBeUndefined();
+  });
+});
+
+describe('listJobs / retryFailedJob', () => {
+  it('lists failed jobs and manually re-queues one with cleared attempt state', () => {
+    const job = enqueueJob(db, { topic: 'notification' });
+    claimNextJob(db, 'notification');
+    failJob(db, job.id, 'token=private', { maxAttempts: 1 });
+    expect(listJobs(db, { status: 'failed' }).map((item) => item.id)).toContain(job.id);
+    const retried = retryFailedJob(db, job.id);
+    expect(retried.status).toBe('pending');
+    expect(retried.attempts).toBe(0);
+    expect(retried.error).toBeNull();
   });
 });
 

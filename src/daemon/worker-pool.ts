@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { claimNextJob, completeJob, failJob, type JobRecord } from '../db/repositories/jobs.js';
+import { tryRecordOperationalLog } from '../db/repositories/operational-logs.js';
 import type { JobTopic } from '../domain/job-topic.js';
 
 export type JobHandler = (job: JobRecord) => void | Promise<void>;
@@ -24,6 +25,9 @@ async function drainSlot(options: WorkerPoolOptions, topic: JobTopic): Promise<v
     const job = claimNextJob(options.db, topic);
     if (!job) return;
 
+    // No start/fail logging here — claimNextJob/completeJob/failJob in
+    // jobs.ts already record the full lifecycle (including entity
+    // correlation), so a second log here would just duplicate every entry.
     try {
       await handler(job);
       completeJob(options.db, job.id);
@@ -74,7 +78,11 @@ export function startPolling(options: WorkerPoolOptions, pollIntervalMs = 1000):
         // the rejection was unhandled: Node terminates the process by
         // default, and even short of that, the `if (!stopped)` reschedule
         // below would simply never run, silently stalling the daemon.
-        console.error('[daemon] drain tick failed:', error instanceof Error ? error.message : error);
+        const message = error instanceof Error ? error.message : String(error);
+        tryRecordOperationalLog(options.db, {
+          severity: 'error', outcome: 'failed', component: 'daemon', action: 'poll', error,
+        });
+        console.error('[daemon] drain tick failed:', message);
       })
       .then(() => {
         if (!stopped) timer = setTimeout(tick, pollIntervalMs);

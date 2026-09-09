@@ -36,7 +36,8 @@ function runScript(scriptPath: string, args: string[], stdinContent: string): Pr
     child.on('error', reject);
     child.on('close', (code) => {
       if (code !== 0) {
-        reject(new ExtractionError(`${scriptPath} exited ${code}: ${stderr.slice(0, 2000) || stdout.slice(0, 2000)}`));
+        // stdout/stderr can contain private page content or credentials.
+        reject(new ExtractionError(`Extraction command exited with code ${code}`));
         return;
       }
       resolve(stdout);
@@ -76,18 +77,18 @@ export async function runExtraction(
   try {
     envelope = JSON.parse(stdout) as ClaudeResultEnvelope;
   } catch {
-    throw new ExtractionError(`claude -p did not return valid JSON envelope: ${stdout.slice(0, 500)}`);
+    throw new ExtractionError('claude -p did not return a valid JSON envelope');
   }
 
   if (envelope.is_error || typeof envelope.result !== 'string') {
-    throw new ExtractionError(`claude -p reported an error: ${envelope.result ?? JSON.stringify(envelope)}`);
+    throw new ExtractionError('claude -p reported an error');
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripMarkdownFence(envelope.result));
   } catch {
-    throw new ExtractionError(`claude -p's answer was not valid JSON: ${envelope.result.slice(0, 500)}`);
+    throw new ExtractionError("claude -p's answer was not valid JSON");
   }
 
   // Every extraction prompt asks for a JSON *object* with specific fields.
@@ -95,7 +96,7 @@ export async function runExtraction(
   // to fail clearly here than have a caller's `.name`/`.title` access throw
   // a confusing TypeError two frames away from where the real problem is.
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new ExtractionError(`claude -p's answer was not a JSON object: ${envelope.result.slice(0, 500)}`);
+    throw new ExtractionError("claude -p's answer was not a JSON object");
   }
 
   return parsed;
