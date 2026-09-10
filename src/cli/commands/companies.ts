@@ -33,7 +33,7 @@ export function registerCompaniesCommand(program: Command): void {
 
   companies
     .command('add')
-    .description('Add a new company by URL')
+    .description('Add a new company by URL. This will trigger enrichment process')
     .argument('<url>', 'Company URL', parseHttpUrl)
     .action((url: string) => {
       reportKnownErrors(KNOWN_ERRORS, () => {

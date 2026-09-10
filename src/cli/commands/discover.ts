@@ -7,7 +7,7 @@ import { ensureDaemonRunning } from '../../lib/daemon-control.js';
 export function registerDiscoverCommand(program: Command): void {
   program
     .command('discover')
-    .description('Scan tracked companies for new roles matching your preferences')
+    .description('Scan tracked companies for new roles matching your preferences. Needs to be started manually!')
     .action(() => {
       const db = getDb();
       const companies = listCompanies(db);
