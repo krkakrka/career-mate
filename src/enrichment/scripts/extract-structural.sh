@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Extracts structured data from a company or role page's HTML.
-# Usage: extract-structural.sh <company|role>   (page HTML piped via stdin)
+# Extracts structured data from the derived text of a company or role page.
+# Usage: extract-structural.sh <company|role>   (derived page text piped via stdin)
 # Prints claude -p's raw --output-format json envelope to stdout; the
 # caller (src/enrichment/claude-extract.ts) unwraps .result and strips the
 # markdown fence claude -p wraps JSON answers in.
@@ -11,7 +11,7 @@ KIND="${1:-}"
 case "$KIND" in
   company)
     PROMPT=$(cat <<'EOF'
-You are extracting structured data from a company's own website HTML (homepage or about page), piped to you via stdin. Base your answer only on the provided content — do not browse or search for anything else.
+You are extracting structured data from the text of a company's own website (homepage or about page), piped to you via stdin. The text begins with a header block of `key: value` lines (title, canonical, og:* metadata) taken from the page's markup, then the page's visible text, with link targets written inline as `Anchor text (https://...)`. Base your answer only on the provided content — do not browse or search for anything else.
 
 Extract:
 - "name": the company's name
@@ -23,7 +23,7 @@ EOF
     ;;
   role)
     PROMPT=$(cat <<'EOF'
-You are extracting structured data from a job posting page's HTML, piped to you via stdin. Base your answer only on the provided content — do not browse or search for anything else.
+You are extracting structured data from the text of a job posting page, piped to you via stdin. The text begins with a header block of `key: value` lines (title, canonical, og:* metadata) taken from the page's markup, then the page's visible text, with link targets written inline as `Anchor text (https://...)`. Base your answer only on the provided content — do not browse or search for anything else.
 
 Extract:
 - "title": the job title
@@ -36,7 +36,7 @@ EOF
     )
     ;;
   *)
-    echo "usage: extract-structural.sh <company|role>  (HTML piped via stdin)" >&2
+    echo "usage: extract-structural.sh <company|role>  (derived page text piped via stdin)" >&2
     exit 1
     ;;
 esac

@@ -161,7 +161,7 @@ export function registerRolesCommand(program: Command): void {
 
   roles
     .command('rerun-enrichment')
-    .description('Manually re-run structural-fetch enrichment for a role')
+    .description('Re-fetch a role page (ignoring the snapshot refresh window) and re-run structural enrichment')
     .argument('<id>', 'Role id', parsePositiveInt)
     .action((id: number) => {
       const db = getDb();
@@ -171,7 +171,9 @@ export function registerRolesCommand(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      enqueueEnrichment(db, { kind: 'role-structural', roleId: id });
+      // force: the point of the command is to go look at the page again —
+      // re-extracting the cached snapshot would make it a no-op.
+      enqueueEnrichment(db, { kind: 'role-structural', roleId: id, force: true });
       console.log(`Re-enrichment queued for role #${id}.`);
     });
 }

@@ -64,7 +64,7 @@ export async function withPersistentBrowser<T>(
 
 const FETCH_TIMEOUT_MS = 20_000;
 
-/** Fetches a page's rendered HTML using the authenticated persistent profile. Login-gated equivalent of enrichment/fetch-page.ts's plain fetch. */
+/** Fetches a page's rendered HTML using the authenticated persistent profile. Login-gated equivalent of pages/fetch.ts's plain fetch. */
 export async function fetchAuthenticatedPage(url: string): Promise<string> {
   return withPersistentBrowser(async (context) => {
     const page = await context.newPage();

@@ -10,7 +10,13 @@ import { createRecruiterContact } from '../db/repositories/recruiter-contacts.js
 import { createRole, setReapplyAfter, setStatus } from '../db/repositories/roles.js';
 import { buildPipelineDigest } from './pipeline-digest.js';
 
-const SETTINGS: Settings = { recruiter_nudge_days: 7, stale_days: 14, reapply_cooldown_months: 1 };
+const SETTINGS: Settings = {
+  recruiter_nudge_days: 7,
+  stale_days: 14,
+  reapply_cooldown_months: 1,
+  page_refresh_days: { role: 3, company: 30 },
+  claude_max_budget_usd: 0.5,
+};
 
 let tempDir: string;
 let db: Database.Database;

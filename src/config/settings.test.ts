@@ -30,6 +30,8 @@ describe('loadSettings', () => {
       recruiter_nudge_days: 7,
       stale_days: 14,
       reapply_cooldown_months: 1,
+      page_refresh_days: { role: 3, company: 30 },
+      claude_max_budget_usd: 0.5,
     });
   });
 
@@ -41,6 +43,28 @@ describe('loadSettings', () => {
     fs.writeFileSync(configPath, JSON.stringify(edited));
 
     expect(loadSettings().recruiter_nudge_days).toBe(3);
+  });
+
+  it('fills in keys a settings.json written by an older version is missing', () => {
+    const configDir = path.join(tempDir, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ recruiter_nudge_days: 3 }));
+
+    const settings = loadSettings();
+
+    expect(settings.recruiter_nudge_days).toBe(3);
+    expect(settings.page_refresh_days).toEqual({ role: 3, company: 30 });
+    expect(settings.claude_max_budget_usd).toBe(0.5);
+  });
+
+  it('treats a partial page_refresh_days edit as an override, not a replacement', () => {
+    const configDir = path.join(tempDir, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ page_refresh_days: { role: 1 } }));
+
+    // A shallow merge alone would leave `company` undefined here, and an
+    // undefined refresh window silently means "never reuse a snapshot".
+    expect(loadSettings().page_refresh_days).toEqual({ role: 1, company: 30 });
   });
 
   it('throws on malformed JSON instead of silently wiping the file back to defaults', () => {

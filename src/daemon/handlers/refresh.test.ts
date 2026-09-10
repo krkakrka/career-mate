@@ -8,22 +8,54 @@ import { listEventsForEntity } from '../../db/repositories/events.js';
 import { claimNextJob } from '../../db/repositories/jobs.js';
 import { createRole, getRoleById } from '../../db/repositories/roles.js';
 import { startFixtureServer, type FixtureServer } from '../../../test/helpers/fixture-server.js';
+import { snapshotPage } from '../../pages/store.js';
 import { handleRoleClosureCheck } from './refresh.js';
 
 let tempDir: string;
+let originalDataDir: string | undefined;
 let db: Database.Database;
 let server: FixtureServer | undefined;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-refresh-handler-'));
+  // These handlers snapshot pages through the page store, which resolves
+  // its files via getDataDir(). Without this, any fixture route that
+  // actually served a 200 would write into the project's real ./.data.
+  originalDataDir = process.env.CM_DATA_DIR;
+  process.env.CM_DATA_DIR = tempDir;
   db = openDb(path.join(tempDir, 'career-mate.db'));
 });
 
 afterEach(async () => {
+  process.env.CM_DATA_DIR = originalDataDir;
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
   await server?.close();
   server = undefined;
+});
+
+describe('handleRoleClosureCheck — snapshot refresh window', () => {
+  // The "no re-fetch inside the window" half of this policy is covered
+  // deterministically in src/pages/store.test.ts; asserting it here too
+  // would mean a live `claude -p` closure call on the cached text, in a
+  // file that is otherwise pure unit tests.
+  it('force re-fetches, so a posting pulled inside the window is still detected as closed', async () => {
+    let gone = false;
+    server = await startFixtureServer({
+      '/job': () => (gone ? { status: 404 } : '<html><body><p>Still hiring.</p></body></html>'),
+    });
+    const url = `${server.url}/job`;
+    const role = createRole(db, { url });
+    await snapshotPage(db, url, { kind: 'role' });
+
+    gone = true;
+    await handleRoleClosureCheck(db, role.id, true);
+
+    // Without force this would read the cached "Still hiring." text and
+    // never see the 404 — `cm refresh --force` exists for exactly this.
+    expect(server.requests).toEqual(['/job', '/job']);
+    expect(getRoleById(db, role.id)!.closed_at).not.toBeNull();
+  });
 });
 
 describe('handleRoleClosureCheck — HTTP 404 short-circuit', () => {

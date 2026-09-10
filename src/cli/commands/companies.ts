@@ -105,7 +105,7 @@ export function registerCompaniesCommand(program: Command): void {
 
   companies
     .command('rerun-enrichment')
-    .description('Manually re-run structural fetch + full research for a company')
+    .description('Re-fetch a company page (ignoring the snapshot refresh window) and re-run structural fetch + full research')
     .argument('<id>', 'Company id', parsePositiveInt)
     .action((id: number) => {
       const db = getDb();
@@ -115,7 +115,8 @@ export function registerCompaniesCommand(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      enqueueEnrichment(db, { kind: 'company-structural', companyId: id });
+      // force: see the note on `roles rerun-enrichment`.
+      enqueueEnrichment(db, { kind: 'company-structural', companyId: id, force: true });
       console.log(`Re-enrichment queued for company #${id}.`);
     });
 }

@@ -26,14 +26,21 @@ function fakeJob(payload: unknown): JobRecord {
 }
 
 let tempDir: string;
+let originalDataDir: string | undefined;
 let db: Database.Database;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-enrichment-handler-'));
+  // These handlers snapshot pages through the page store, which resolves
+  // its files via getDataDir(). Without this, any fixture route that
+  // actually served a 200 would write into the project's real ./.data.
+  originalDataDir = process.env.CM_DATA_DIR;
+  process.env.CM_DATA_DIR = tempDir;
   db = openDb(path.join(tempDir, 'career-mate.db'));
 });
 
 afterEach(() => {
+  process.env.CM_DATA_DIR = originalDataDir;
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

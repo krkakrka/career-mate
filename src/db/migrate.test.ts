@@ -140,6 +140,7 @@ describe('0002_nullable_role_company migration', () => {
       '0001_init.sql',
       '0002_nullable_role_company.sql',
       '0003_operational_logs.sql',
+      '0004_page_snapshots.sql',
     ]);
     db.close();
   });
@@ -190,5 +191,56 @@ describe('migration lock stale-holder recovery', () => {
     // Should recover near-instantly via stale-lock detection, not sit out
     // the full 10s timeout.
     expect(elapsedMs).toBeLessThan(2000);
+  });
+});
+
+describe('0004_page_snapshots migration', () => {
+  it('creates the append-only page_snapshots table with a latest-per-url index', () => {
+    const db = openDb(dbPath);
+
+    const columns = (db.pragma('table_info(page_snapshots)') as { name: string; notnull: number }[]).reduce(
+      (acc, column) => ({ ...acc, [column.name]: column.notnull === 1 }),
+      {} as Record<string, boolean>,
+    );
+
+    expect(Object.keys(columns).sort()).toEqual([
+      'bytes',
+      'content_hash',
+      'error',
+      'fetched_at',
+      'html_path',
+      'http_status',
+      'id',
+      'text_hash',
+      'text_path',
+      'truncated',
+      'url',
+      'url_hash',
+    ]);
+    // Everything a *failed* fetch can't supply must be nullable.
+    expect(columns.url).toBe(true);
+    expect(columns.url_hash).toBe(true);
+    expect(columns.fetched_at).toBe(true);
+    expect(columns.http_status).toBe(false);
+    expect(columns.content_hash).toBe(false);
+    expect(columns.html_path).toBe(false);
+    expect(columns.error).toBe(false);
+
+    const indexes = (db.pragma('index_list(page_snapshots)') as { name: string }[]).map((index) => index.name);
+    expect(indexes).toContain('idx_page_snapshots_url_hash');
+
+    db.close();
+  });
+
+  it('is idempotent — re-running migrations on an existing DB leaves the table and its rows alone', () => {
+    const first = openDb(dbPath);
+    first
+      .prepare('INSERT INTO page_snapshots (url, url_hash, fetched_at) VALUES (?, ?, ?)')
+      .run('https://example.com', 'abc', '2026-09-10T00:00:00.000Z');
+    first.close();
+
+    const second = openDb(dbPath);
+    expect((second.prepare('SELECT COUNT(*) as c FROM page_snapshots').get() as { c: number }).c).toBe(1);
+    second.close();
   });
 });

@@ -16,9 +16,9 @@ import {
   updateStructuralFields as updateRoleStructuralFields,
 } from '../../db/repositories/roles.js';
 import { runExtraction } from '../../enrichment/claude-extract.js';
-import { fetchPageContent } from '../../enrichment/fetch-page.js';
 import { getSourceRecipe } from '../../enrichment/sources.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
+import { readSnapshotText, snapshotPage } from '../../pages/store.js';
 import { recomputePriorityForCompanyRoles, recomputePriorityForRole } from '../../scoring/priority.js';
 
 const structuralScript = fileURLToPath(new URL('../../enrichment/scripts/extract-structural.sh', import.meta.url));
@@ -26,8 +26,12 @@ const researchWebScript = fileURLToPath(new URL('../../enrichment/scripts/resear
 const extractWlbScript = fileURLToPath(new URL('../../enrichment/scripts/extract-wlb.sh', import.meta.url));
 
 export type EnrichmentJobPayload =
-  | { kind: 'company-structural'; companyId: number }
-  | { kind: 'role-structural'; roleId: number }
+  // `force` on the two structural kinds means only "take a new snapshot,
+  // ignoring page_refresh_days" — it never overwrites derived data. It is
+  // what `rerun-enrichment` sets, so that command keeps meaning "go look
+  // at the page again" rather than re-extracting the cached text.
+  | { kind: 'company-structural'; companyId: number; force?: boolean }
+  | { kind: 'role-structural'; roleId: number; force?: boolean }
   | { kind: 'role-research'; roleId: number }
   | { kind: 'company-research'; companyId: number }
   | { kind: 'company-wlb'; companyId: number };
@@ -67,10 +71,10 @@ export async function handleEnrichmentJob(db: Database.Database, job: JobRecord)
 
   switch (payload.kind) {
     case 'company-structural':
-      await handleCompanyStructural(db, payload.companyId);
+      await handleCompanyStructural(db, payload.companyId, payload.force ?? false);
       return;
     case 'role-structural':
-      await handleRoleStructural(db, payload.roleId);
+      await handleRoleStructural(db, payload.roleId, payload.force ?? false);
       return;
     case 'role-research':
       await handleRoleResearch(db, payload.roleId);
@@ -86,12 +90,16 @@ export async function handleEnrichmentJob(db: Database.Database, job: JobRecord)
   }
 }
 
-async function handleCompanyStructural(db: Database.Database, companyId: number): Promise<void> {
+async function handleCompanyStructural(db: Database.Database, companyId: number, force: boolean): Promise<void> {
   const company = getCompanyById(db, companyId);
   if (!company) throw new Error(`Company #${companyId} not found`);
 
-  const html = await fetchPageContent(company.url);
-  const extraction = (await runExtraction(structuralScript, ['company'], html)) as CompanyStructuralExtraction;
+  const snapshot = await snapshotPage(db, company.url, { kind: 'company', force });
+  const extraction = (await runExtraction(
+    structuralScript,
+    ['company'],
+    readSnapshotText(snapshot),
+  )) as CompanyStructuralExtraction;
 
   updateCompanyStructuralFields(db, companyId, {
     name: extraction.name ?? null,
@@ -114,15 +122,19 @@ async function handleCompanyStructural(db: Database.Database, companyId: number)
   enqueueJob(db, { topic: 'enrichment', payload: { kind: 'company-wlb', companyId } });
 }
 
-async function handleRoleStructural(db: Database.Database, roleId: number): Promise<void> {
+async function handleRoleStructural(db: Database.Database, roleId: number, force: boolean): Promise<void> {
   const role = getRoleById(db, roleId);
   if (!role) throw new Error(`Role #${roleId} not found`);
 
-  // fetch + runExtraction below take several seconds — don't trust
+  // snapshotPage + runExtraction below take several seconds — don't trust
   // role.company_id captured before them by the time we're deciding
   // whether to resolve a company; re-read fresh right before that check.
-  const html = await fetchPageContent(role.url);
-  const extraction = (await runExtraction(structuralScript, ['role'], html)) as RoleStructuralExtraction;
+  const snapshot = await snapshotPage(db, role.url, { kind: 'role', force });
+  const extraction = (await runExtraction(
+    structuralScript,
+    ['role'],
+    readSnapshotText(snapshot),
+  )) as RoleStructuralExtraction;
 
   updateRoleStructuralFields(db, roleId, {
     title: extraction.title ?? null,

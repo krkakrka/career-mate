@@ -5,12 +5,13 @@ import { recordEvent } from '../../db/repositories/events.js';
 import { enqueueJob, type JobRecord } from '../../db/repositories/jobs.js';
 import { getRoleById, markClosed, markLastChecked } from '../../db/repositories/roles.js';
 import { runExtraction } from '../../enrichment/claude-extract.js';
-import { fetchPageContent, FetchError } from '../../enrichment/fetch-page.js';
+import { FetchError } from '../../pages/fetch.js';
+import { readSnapshotText, snapshotPage } from '../../pages/store.js';
 import type { NotificationJobPayload } from './notification.js';
 
 const closureScript = fileURLToPath(new URL('../../enrichment/scripts/extract-closure-status.sh', import.meta.url));
 
-export type RefreshJobPayload = { kind: 'role-closure-check'; roleId: number };
+export type RefreshJobPayload = { kind: 'role-closure-check'; roleId: number; force?: boolean };
 
 interface ClosureExtraction {
   status?: 'open' | 'closed' | 'unknown' | null;
@@ -22,11 +23,11 @@ export async function handleRefreshJob(db: Database.Database, job: JobRecord): P
   if (payload.kind !== 'role-closure-check') {
     throw new Error(`Unknown refresh job payload: ${job.payload}`);
   }
-  await handleRoleClosureCheck(db, payload.roleId);
+  await handleRoleClosureCheck(db, payload.roleId, payload.force ?? false);
 }
 
 /** Exported for direct testing of the closure-decision logic without needing a real fetch/claude -p call. */
-export async function handleRoleClosureCheck(db: Database.Database, roleId: number): Promise<void> {
+export async function handleRoleClosureCheck(db: Database.Database, roleId: number, force = false): Promise<void> {
   const role = getRoleById(db, roleId);
   if (!role) throw new Error(`Role #${roleId} not found`);
   if (role.closed_at != null) return; // already known closed — nothing to do
@@ -35,8 +36,12 @@ export async function handleRoleClosureCheck(db: Database.Database, roleId: numb
   let reason: string | null = null;
 
   try {
-    const html = await fetchPageContent(role.url);
-    const extraction = (await runExtraction(closureScript, [], html)) as ClosureExtraction;
+    // Without --force this honours settings.page_refresh_days.role: a
+    // posting snapshotted within the window is not re-fetched, so a run of
+    // `cm refresh` more often than that window is deliberately a no-op.
+    // `cm refresh --force` is the "go look now" escape hatch.
+    const snapshot = await snapshotPage(db, role.url, { kind: 'role', force });
+    const extraction = (await runExtraction(closureScript, [], readSnapshotText(snapshot))) as ClosureExtraction;
     closed = extraction.status === 'closed';
     reason = extraction.reason ?? null;
   } catch (error) {
