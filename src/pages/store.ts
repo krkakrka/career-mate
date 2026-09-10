@@ -8,7 +8,9 @@ import {
   insertPageSnapshot,
   type PageSnapshotRecord,
 } from '../db/repositories/page-snapshots.js';
+import { tryRecordOperationalLog } from '../db/repositories/operational-logs.js';
 import { getDataDir } from '../lib/paths.js';
+import { truncateAtCodePoint } from '../lib/truncate.js';
 import { fetchRawPage, FetchError, type RawPage } from './fetch.js';
 import { deriveText } from './text.js';
 
@@ -29,6 +31,14 @@ interface SnapshotFilePaths {
   htmlPath: string;
   textPath: string;
 }
+
+/**
+ * The bound on model input, now that the raw fetch cap only guards memory.
+ * Derived text of even a very large page is normally well under this; a
+ * page that exceeds it is a listing wall or a data dump, and the first
+ * chunk is the part that describes the posting.
+ */
+const MAX_TEXT_LENGTH = 250_000;
 
 function sha256(value: string): string {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
@@ -56,6 +66,22 @@ export function readSnapshotText(snapshot: PageSnapshotRecord): string {
     );
   }
   return fs.readFileSync(resolvePagePath(snapshot.text_path), 'utf-8');
+}
+
+/**
+ * Reads a snapshot's raw HTML. Used by the deterministic derivations,
+ * which read structured metadata (`<title>`, `og:*`, `<link rel=canonical>`)
+ * out of the markup that states it, rather than out of the flattened text —
+ * body text shaped like `key: value` is indistinguishable from a header
+ * line once the page has been flattened.
+ */
+export function readSnapshotHtml(snapshot: PageSnapshotRecord): string {
+  if (!snapshot.html_path) {
+    throw new Error(
+      `Page snapshot #${snapshot.id} of ${snapshot.url} has no stored HTML (${snapshot.error ?? 'fetch captured no content'})`,
+    );
+  }
+  return fs.readFileSync(resolvePagePath(snapshot.html_path), 'utf-8');
 }
 
 /**
@@ -213,7 +239,9 @@ export async function snapshotPage(
 
   const fetchedAt = new Date().toISOString();
   const contentHash = sha256(raw.html);
-  const text = deriveText(raw.html);
+  // Hash what is written, never what was computed: the truncation has to
+  // happen before the hash or the .txt on disk stops matching text_hash.
+  const text = truncateAtCodePoint(deriveText(raw.html), MAX_TEXT_LENGTH);
   const textHash = sha256(text);
 
   // An unchanged body records a row — "we checked at T, still the same" is
@@ -230,6 +258,19 @@ export async function snapshotPage(
   // Files are written before the row, never after: an orphaned file with no
   // row is harmless, a row pointing at a file that was never written is not.
   const paths = reusable ?? writeSnapshotFiles(urlHash, fetchedAt, raw.html, text);
+
+  if (raw.truncated) {
+    // Hitting a 5 MB body means something unusual — a listing wall, a data
+    // dump, a misconfigured page. Recording it is what keeps a silently
+    // half-captured page from looking like a page that was simply short.
+    tryRecordOperationalLog(db, {
+      severity: 'warn',
+      outcome: 'succeeded',
+      component: 'pages',
+      action: 'snapshot_truncated',
+      context: { url, bytes: Buffer.byteLength(raw.html, 'utf-8') },
+    });
+  }
 
   return insertPageSnapshot(db, {
     url,

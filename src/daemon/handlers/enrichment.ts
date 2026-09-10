@@ -15,10 +15,17 @@ import {
   updateResearchFields as updateRoleResearchFields,
   updateStructuralFields as updateRoleStructuralFields,
 } from '../../db/repositories/roles.js';
+import {
+  COMPANY_STRUCTURAL_FIELDS,
+  missingFields,
+  prefillCompanyStructural,
+  prefillRoleStructural,
+  ROLE_STRUCTURAL_FIELDS,
+} from '../../derive/structural.js';
 import { runExtraction } from '../../enrichment/claude-extract.js';
 import { getSourceRecipe } from '../../enrichment/sources.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
-import { readSnapshotText, snapshotPage } from '../../pages/store.js';
+import { readSnapshotHtml, readSnapshotText, snapshotPage } from '../../pages/store.js';
 import { recomputePriorityForCompanyRoles, recomputePriorityForRole } from '../../scoring/priority.js';
 
 const structuralScript = fileURLToPath(new URL('../../enrichment/scripts/extract-structural.sh', import.meta.url));
@@ -95,14 +102,24 @@ async function handleCompanyStructural(db: Database.Database, companyId: number,
   if (!company) throw new Error(`Company #${companyId} not found`);
 
   const snapshot = await snapshotPage(db, company.url, { kind: 'company', force });
-  const extraction = (await runExtraction(
-    structuralScript,
-    ['company'],
-    readSnapshotText(snapshot),
-  )) as CompanyStructuralExtraction;
+  const text = readSnapshotText(snapshot);
+
+  // What the page states about itself is free and more reliable than a
+  // model's reading of it; the model is asked only for the remainder.
+  const prefill = prefillCompanyStructural(readSnapshotHtml(snapshot));
+  const wanted = missingFields(COMPANY_STRUCTURAL_FIELDS, prefill);
+  // The empty-`wanted` branch is unreachable today (no rule prefills
+  // `description`), and kept deliberately: it is what makes adding one
+  // later skip the call rather than silently re-ask for every field, since
+  // an empty field list makes the script fall back to all of them.
+  const extraction = wanted.length
+    ? ((await runExtraction(structuralScript, ['company', wanted.join(',')], text)) as CompanyStructuralExtraction)
+    : {};
+
+  const name = prefill.name ?? extraction.name ?? null;
 
   updateCompanyStructuralFields(db, companyId, {
-    name: extraction.name ?? null,
+    name,
     description: extraction.description ?? null,
   });
 
@@ -110,7 +127,7 @@ async function handleCompanyStructural(db: Database.Database, companyId: number,
     entityType: 'company',
     entityId: companyId,
     type: 'company.structural_fetch_completed',
-    context: { name: extraction.name ?? null },
+    context: { name, modelFields: wanted },
   });
 
   recomputePriorityForCompanyRoles(db, companyId);
@@ -130,14 +147,19 @@ async function handleRoleStructural(db: Database.Database, roleId: number, force
   // role.company_id captured before them by the time we're deciding
   // whether to resolve a company; re-read fresh right before that check.
   const snapshot = await snapshotPage(db, role.url, { kind: 'role', force });
-  const extraction = (await runExtraction(
-    structuralScript,
-    ['role'],
-    readSnapshotText(snapshot),
-  )) as RoleStructuralExtraction;
+  const text = readSnapshotText(snapshot);
+
+  const prefill = prefillRoleStructural(readSnapshotHtml(snapshot));
+  const wanted = missingFields(ROLE_STRUCTURAL_FIELDS, prefill);
+  // See the note in handleCompanyStructural on the empty-`wanted` branch.
+  const extraction = wanted.length
+    ? ((await runExtraction(structuralScript, ['role', wanted.join(',')], text)) as RoleStructuralExtraction)
+    : {};
+
+  const title = prefill.title ?? extraction.title ?? null;
 
   updateRoleStructuralFields(db, roleId, {
-    title: extraction.title ?? null,
+    title,
     description: extraction.description ?? null,
   });
 
@@ -145,7 +167,7 @@ async function handleRoleStructural(db: Database.Database, roleId: number, force
     entityType: 'role',
     entityId: roleId,
     type: 'role.structural_fetch_completed',
-    context: { title: extraction.title ?? null },
+    context: { title, modelFields: wanted },
   });
 
   const currentRole = getRoleById(db, roleId);

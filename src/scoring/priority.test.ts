@@ -9,6 +9,7 @@ import { openDb } from '../db/client.js';
 import { createCompany, getCompanyById, setPreferenceRating } from '../db/repositories/companies.js';
 import { createRole, getRoleById } from '../db/repositories/roles.js';
 import { computePriorityScore, recomputePriorityForCompanyRoles, recomputePriorityForRole } from './priority.js';
+import { restoreEnv } from '../../test/helpers/env.js';
 
 const EQUAL_WEIGHTS: ScoringWeights = {
   comp_fit: 1,
@@ -267,7 +268,7 @@ describe('recomputePriorityForRole / recomputePriorityForCompanyRoles (DB integr
   });
 
   afterEach(() => {
-    process.env.CM_DATA_DIR = originalDataDir;
+    restoreEnv('CM_DATA_DIR', originalDataDir);
     db.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

@@ -6,9 +6,12 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFixtureServer, type FixtureServer } from '../../test/helpers/fixture-server.js';
 import { openDb } from '../db/client.js';
+import { listOperationalLogs } from '../db/repositories/operational-logs.js';
 import { getLatestSnapshot, listSnapshotsForUrl } from '../db/repositories/page-snapshots.js';
-import { hashUrl, readSnapshotText, resolvePagePath, snapshotPage } from './store.js';
+import { MAX_CONTENT_LENGTH } from './fetch.js';
+import { hashUrl, readSnapshotHtml, readSnapshotText, resolvePagePath, snapshotPage } from './store.js';
 import { deriveText } from './text.js';
+import { restoreEnv } from '../../test/helpers/env.js';
 
 const PAGE_HTML = `<!doctype html>
 <html>
@@ -36,7 +39,7 @@ afterEach(async () => {
   await server?.close();
   server = undefined;
   db.close();
-  process.env.CM_DATA_DIR = originalDataDir;
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -168,10 +171,19 @@ describe('snapshotPage', () => {
   });
 
   it('records whether the stored body hit the size cap', async () => {
-    server = await startFixtureServer({ '/small': PAGE_HTML, '/huge': `<p>${'x'.repeat(600_000)}</p>` });
+    server = await startFixtureServer({
+      '/small': PAGE_HTML,
+      '/huge': `<p>${'x'.repeat(MAX_CONTENT_LENGTH + 1_000)}</p>`,
+    });
 
     expect((await snapshotPage(db, `${server.url}/small`, { kind: 'role' })).truncated).toBe(0);
     expect((await snapshotPage(db, `${server.url}/huge`, { kind: 'role' })).truncated).toBe(1);
+
+    // Recorded, not silent: a half-captured page must be distinguishable
+    // from a page that was simply short.
+    const warnings = listOperationalLogs(db, { action: 'snapshot_truncated' });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.severity).toBe('warn');
   });
 
   it('stores exactly the bytes that content_hash covers', async () => {
@@ -279,6 +291,25 @@ describe('snapshotPage', () => {
 
     expect(path.dirname(a.html_path!)).not.toBe(path.dirname(b.html_path!));
     expect(fs.readdirSync(path.join(tempDir, 'pages'))).toHaveLength(2);
+  });
+});
+
+describe('readSnapshotHtml', () => {
+  it('returns the raw markup, which the deterministic derivations read metadata from', async () => {
+    server = await startFixtureServer({ '/job': PAGE_HTML });
+    const snapshot = await snapshotPage(db, `${server.url}/job`, { kind: 'role' });
+
+    expect(readSnapshotHtml(snapshot)).toBe(PAGE_HTML);
+    // The model still gets the small form, not this.
+    expect(readSnapshotText(snapshot).length).toBeLessThan(readSnapshotHtml(snapshot).length);
+  });
+
+  it('throws a message naming the URL when a snapshot captured no content', async () => {
+    server = await startFixtureServer({ '/gone': { status: 500 } });
+    const url = `${server.url}/gone`;
+    await expect(snapshotPage(db, url, { kind: 'role' })).rejects.toThrow();
+
+    expect(() => readSnapshotHtml(getLatestSnapshot(db, hashUrl(url))!)).toThrow(/no stored HTML/);
   });
 });
 

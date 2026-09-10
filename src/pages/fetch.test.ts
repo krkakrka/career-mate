@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFixtureServer, type FixtureServer } from '../../test/helpers/fixture-server.js';
-import { fetchRawPage, FetchError } from './fetch.js';
+import { fetchRawPage, FetchError, MAX_CONTENT_LENGTH } from './fetch.js';
 
 let server: FixtureServer | undefined;
 
@@ -10,6 +10,13 @@ afterEach(async () => {
 });
 
 describe('fetchRawPage', () => {
+  it('budgets memory, not model input — the cap is far above a real page now that the model reads derived text', () => {
+    // The old 500KB cap was applied after script/style were stripped. A raw
+    // body cap of the same size would be spent on an SPA's inline bootstrap
+    // JSON before reaching the job description.
+    expect(MAX_CONTENT_LENGTH).toBeGreaterThan(1_000_000);
+  });
+
   it('returns the body and status on a 200', async () => {
     server = await startFixtureServer({ '/hello': '<html><body><h1>Hello</h1></body></html>' });
     const page = await fetchRawPage(`${server.url}/hello`);
@@ -42,11 +49,13 @@ describe('fetchRawPage', () => {
     // Pad to exactly one code unit short of the cap, so the emoji that
     // follows straddles the boundary — a naive slice keeps its high half.
     const emoji = '\u{1F680}';
-    server = await startFixtureServer({ '/huge': `${'x'.repeat(499_999)}${emoji}${'y'.repeat(1_000)}` });
+    server = await startFixtureServer({
+      '/huge': `${'x'.repeat(MAX_CONTENT_LENGTH - 1)}${emoji}${'y'.repeat(1_000)}`,
+    });
 
     const { html } = await fetchRawPage(`${server.url}/huge`);
 
-    expect(html).toHaveLength(499_999);
+    expect(html).toHaveLength(MAX_CONTENT_LENGTH - 1);
     // A lone surrogate survives in a JS string but becomes U+FFFD once
     // written as UTF-8, which would break content_hash's promise about
     // what is on disk.
@@ -54,9 +63,9 @@ describe('fetchRawPage', () => {
   });
 
   it('truncates a body past the size cap and says so', async () => {
-    server = await startFixtureServer({ '/huge': `<p>${'x'.repeat(600_000)}</p>` });
+    server = await startFixtureServer({ '/huge': `<p>${'x'.repeat(MAX_CONTENT_LENGTH + 1_000)}</p>` });
     const page = await fetchRawPage(`${server.url}/huge`);
     expect(page.truncated).toBe(true);
-    expect(page.html).toHaveLength(500_000);
+    expect(page.html).toHaveLength(MAX_CONTENT_LENGTH);
   });
 });

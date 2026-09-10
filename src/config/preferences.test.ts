@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadPreferences } from './preferences.js';
+import { restoreEnv } from '../../test/helpers/env.js';
 
 let tempDir: string;
 let originalDataDir: string | undefined;
@@ -14,7 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env.CM_DATA_DIR = originalDataDir;
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

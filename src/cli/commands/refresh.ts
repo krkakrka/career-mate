@@ -8,11 +8,7 @@ export function registerRefreshCommand(program: Command): void {
   program
     .command('refresh')
     .description('Re-check tracked role URLs for closure and notify when one has closed')
-    .option(
-      '--force',
-      'Fetch every role page again, ignoring the snapshot refresh window (settings.page_refresh_days.role)',
-    )
-    .action((options: { force?: boolean }) => {
+    .action(() => {
       const db = getDb();
       const roleIds = listRoleIdsNeedingClosureCheck(db);
       if (roleIds.length === 0) {
@@ -25,10 +21,7 @@ export function registerRefreshCommand(program: Command): void {
       // blocking this command on it. Check `cm inbox` for closures found,
       // or `cm worker status` for progress.
       for (const roleId of roleIds) {
-        enqueueJob(db, {
-          topic: 'refresh',
-          payload: { kind: 'role-closure-check', roleId, force: options.force ?? false },
-        });
+        enqueueJob(db, { topic: 'refresh', payload: { kind: 'role-closure-check', roleId } });
       }
       ensureDaemonRunning();
       console.log(

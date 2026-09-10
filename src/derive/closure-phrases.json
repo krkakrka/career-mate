@@ -1,0 +1,20 @@
+{
+  "_comment": "Phrases that mean a posting is definitively closed, matched case-insensitively against a page's derived text. Each entry names an ATS or site the phrase was actually seen on, so an entry can be re-checked against a real page rather than guessed at. Keep these unambiguous: a false positive silently closes a live role, which is worse than paying for a model call. Matching normalizes curly quotes and whitespace first, so write phrases in plain ASCII.",
+  "phrases": [
+    { "phrase": "no longer accepting applications", "seenOn": "Greenhouse" },
+    { "phrase": "this job is no longer available", "seenOn": "Lever" },
+    { "phrase": "this posting is no longer available", "seenOn": "Lever" },
+    { "phrase": "this job has been filled", "seenOn": "Workable" },
+    { "phrase": "this position has been filled", "seenOn": "Workable" },
+    { "phrase": "position has been closed", "seenOn": "Ashby" },
+    { "phrase": "this job posting is closed", "seenOn": "Ashby" },
+    { "phrase": "job not found", "seenOn": "Workday" },
+    { "phrase": "this job posting is no longer active", "seenOn": "Workday" },
+    { "phrase": "the job you are looking for is no longer open", "seenOn": "SmartRecruiters" },
+    { "phrase": "applications are closed", "seenOn": "Personio" },
+    { "phrase": "this vacancy is closed", "seenOn": "Personio" },
+    { "phrase": "this job ad is no longer active", "seenOn": "Recruitee" },
+    { "phrase": "no longer open for applications", "seenOn": "Teamtailor" },
+    { "phrase": "this opportunity is closed", "seenOn": "BambooHR" }
+  ]
+}

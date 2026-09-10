@@ -15,7 +15,13 @@ import { runCli } from '../helpers/run-cli.js';
 // produces full cited markdown reports across many sources, not 2-3
 // numbers — and a manual timed run of just the *first* call alone took
 // 109s. Budgeted with real headroom instead of guessing again.
-const TEST_TIMEOUT_MS = 400_000;
+// Four live `claude -p` web-search calls (company + role tips, twice
+// over), which have been observed taking 390-465s in total — this budget
+// was set just under the observed range and the test failed on roughly
+// two runs in three for want of ~60s, not for any assertion. Step 21 moves
+// live tests out of `npm test` entirely; until then, the budget should at
+// least reflect what the work actually costs.
+const TEST_TIMEOUT_MS = 900_000;
 
 let dataDir: string;
 let dbPath: string;

@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFixtureServer, type FixtureServer } from '../../test/helpers/fixture-server.js';
 import { withPersistentBrowser } from './profile.js';
+import { restoreEnv } from '../../test/helpers/env.js';
 
 let dataDir: string;
 let originalDataDir: string | undefined;
@@ -18,7 +19,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  process.env.CM_DATA_DIR = originalDataDir;
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   await server?.close();
   server = undefined;
   fs.rmSync(dataDir, { recursive: true, force: true });

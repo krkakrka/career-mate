@@ -15,6 +15,11 @@
  * The entities that actually show up in job postings and company pages.
  * Deliberately not the full HTML5 named-entity table (~2000 entries) — an
  * unrecognized entity is left as-is, which is readable rather than wrong.
+ *
+ * Keys are matched exactly, because HTML entity names are case-sensitive:
+ * a case-insensitive lookup would decode `&Eacute;` to a lowercase `é`,
+ * quietly changing a name like `Éclair` — and changing the hash of the
+ * text along with it.
  */
 const NAMED_ENTITIES: Record<string, string> = {
   amp: '&',
@@ -50,11 +55,12 @@ const NAMED_ENTITIES: Record<string, string> = {
   raquo: '»',
   times: '×',
   eacute: 'é',
+  Eacute: 'É',
 };
 
 export function decodeHtmlEntities(value: string): string {
   return value.replace(/&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});/g, (match, body: string) => {
-    if (!body.startsWith('#')) return NAMED_ENTITIES[body.toLowerCase()] ?? match;
+    if (!body.startsWith('#')) return NAMED_ENTITIES[body] ?? match;
 
     const isHex = body[1] === 'x' || body[1] === 'X';
     const codePoint = Number.parseInt(isHex ? body.slice(2) : body.slice(1), isHex ? 16 : 10);
@@ -199,7 +205,12 @@ export function deriveText(html: string): string {
         // <head> is stripped after title/og extraction above: everything in
         // it that carries text is already in the header block, and what's
         // left (link/meta/base) contributes nothing but noise.
-        .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, ' ')
+        //
+        // </head> is optional in HTML and plenty of minified pages omit it,
+        // so <body> also terminates the strip. Without that fallback the
+        // head survives and <title> is emitted a second time in the body —
+        // a divergence in a function whose output is hashed.
+        .replace(/<head\b[^>]*>[\s\S]*?(?:<\/head>|(?=<body\b))/i, ' ')
         // Source whitespace collapses to spaces *before* any line break is
         // introduced: a newline in the markup is only pretty-printing, so a
         // <p> wrapped across three source lines is still one line of text.

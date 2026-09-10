@@ -1,6 +1,19 @@
+import { truncateAtCodePoint } from '../lib/truncate.js';
+
 const FETCH_TIMEOUT_MS = 15_000;
-/** ~500KB of HTML is already generous input for extraction; anything past it is boilerplate or a runaway page. */
-const MAX_CONTENT_LENGTH = 500_000;
+/**
+ * A guard against a runaway response eating memory and disk — no longer a
+ * budget for model input, which is now the derived text.
+ *
+ * The old 500 KB cap was applied *after* script/style contents were
+ * stripped, so it bounded 500 KB of actual content. Snapshots are raw, so
+ * the same number applied to a raw body would be spent on an SPA's inline
+ * bootstrap JSON (a Workday or Next.js posting can carry hundreds of KB of
+ * `__NEXT_DATA__` in <head> alone), truncating the job description away
+ * before `deriveText` ever gets to strip the JS — leaving a near-empty
+ * text and a silently useless extraction.
+ */
+export const MAX_CONTENT_LENGTH = 5_000_000;
 
 export class FetchError extends Error {
   /** The HTTP status code, when the failure was a non-ok response (vs. a network-level failure, where this is undefined). */
@@ -18,22 +31,6 @@ export interface RawPage {
   /** The response body exactly as served, truncated at MAX_CONTENT_LENGTH. */
   html: string;
   truncated: boolean;
-}
-
-/**
- * Truncates without splitting a surrogate pair. A bare `slice` cuts by
- * UTF-16 code unit, so a cut landing between the halves of an astral
- * character (an emoji in a job posting is enough) leaves a lone surrogate:
- * legal in a JS string and hashable, but written to disk as UTF-8 it
- * becomes U+FFFD — and then the bytes on disk no longer hash to the
- * `content_hash` recorded beside them, which is the one guarantee the
- * whole page store rests on.
- */
-function truncateAtCodePoint(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
-  const lastUnit = value.charCodeAt(maxLength - 1);
-  const splitsSurrogatePair = lastUnit >= 0xd800 && lastUnit <= 0xdbff;
-  return value.slice(0, splitsSurrogatePair ? maxLength - 1 : maxLength);
 }
 
 /**

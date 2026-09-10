@@ -69,6 +69,12 @@ describe('deriveText', () => {
     expect(deriveText('<p>a   b\n\n\tc&nbsp;&nbsp;d</p><div></div><div>e</div>')).toBe('a b c d\ne');
   });
 
+  it('strips an unterminated <head>, so the title is not repeated in the body', () => {
+    // </head> is optional in HTML; minified pages routinely omit it.
+    const text = deriveText('<html><head><title>Staff Engineer</title><body><p>Join us</p></body></html>');
+    expect(text).toBe('title: Staff Engineer\n\nJoin us');
+  });
+
   it('handles a page with no head, title or og tags', () => {
     expect(deriveText('<body><p>Bare page</p></body>')).toBe('Bare page');
   });
@@ -168,6 +174,10 @@ describe('decodeHtmlEntities', () => {
 
   it('does not double-decode an escaped entity', () => {
     expect(decodeHtmlEntities('&amp;lt;script&amp;gt;')).toBe('&lt;script&gt;');
+  });
+
+  it('respects entity case, which HTML entity names are sensitive to', () => {
+    expect(decodeHtmlEntities('&eacute;clair vs &Eacute;clair')).toBe('éclair vs Éclair');
   });
 
   it('leaves unknown and out-of-range entities untouched', () => {

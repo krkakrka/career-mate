@@ -10,6 +10,7 @@ import { createRole, getRoleById } from '../../db/repositories/roles.js';
 import { startFixtureServer, type FixtureServer } from '../../../test/helpers/fixture-server.js';
 import { snapshotPage } from '../../pages/store.js';
 import { handleRoleClosureCheck } from './refresh.js';
+import { restoreEnv } from '../../../test/helpers/env.js';
 
 let tempDir: string;
 let originalDataDir: string | undefined;
@@ -27,32 +28,29 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  process.env.CM_DATA_DIR = originalDataDir;
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
   await server?.close();
   server = undefined;
 });
 
-describe('handleRoleClosureCheck — snapshot refresh window', () => {
-  // The "no re-fetch inside the window" half of this policy is covered
-  // deterministically in src/pages/store.test.ts; asserting it here too
-  // would mean a live `claude -p` closure call on the cached text, in a
-  // file that is otherwise pure unit tests.
-  it('force re-fetches, so a posting pulled inside the window is still detected as closed', async () => {
+describe('handleRoleClosureCheck — always re-fetches', () => {
+  it('ignores the snapshot refresh window, so a posting pulled today is detected today', async () => {
     let gone = false;
     server = await startFixtureServer({
       '/job': () => (gone ? { status: 404 } : '<html><body><p>Still hiring.</p></body></html>'),
     });
     const url = `${server.url}/job`;
     const role = createRole(db, { url });
+    // A snapshot seconds old — well inside page_refresh_days.role.
     await snapshotPage(db, url, { kind: 'role' });
 
     gone = true;
-    await handleRoleClosureCheck(db, role.id, true);
+    await handleRoleClosureCheck(db, role.id);
 
-    // Without force this would read the cached "Still hiring." text and
-    // never see the 404 — `cm refresh --force` exists for exactly this.
+    // Honouring the window here would read the cached "Still hiring." text,
+    // never see the 404, and still pay for the model call that follows.
     expect(server.requests).toEqual(['/job', '/job']);
     expect(getRoleById(db, role.id)!.closed_at).not.toBeNull();
   });

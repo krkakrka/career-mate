@@ -9,6 +9,7 @@ import { listEventsForEntity } from '../../db/repositories/events.js';
 import type { JobRecord } from '../../db/repositories/jobs.js';
 import { createRole, getRoleById } from '../../db/repositories/roles.js';
 import { handleEnrichmentJob, resolveRoleCompany } from './enrichment.js';
+import { restoreEnv } from '../../../test/helpers/env.js';
 
 function fakeJob(payload: unknown): JobRecord {
   return {
@@ -40,7 +41,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env.CM_DATA_DIR = originalDataDir;
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
