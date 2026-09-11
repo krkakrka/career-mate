@@ -8,6 +8,9 @@ import { listEventsForEntity } from '../../db/repositories/events.js';
 import { claimNextJob } from '../../db/repositories/jobs.js';
 import { createRole, getRoleById } from '../../db/repositories/roles.js';
 import { startFixtureServer, type FixtureServer } from '../../../test/helpers/fixture-server.js';
+import { getDerivation, upsertDerivation } from '../../db/repositories/derivations.js';
+import { closurePhrasesPath, closureScriptPath } from '../../derive/closure.js';
+import { combinedRecipeVersion } from '../../derive/keys.js';
 import { snapshotPage } from '../../pages/store.js';
 import { handleRoleClosureCheck } from './refresh.js';
 import { restoreEnv } from '../../../test/helpers/env.js';
@@ -33,6 +36,72 @@ afterEach(async () => {
   fs.rmSync(tempDir, { recursive: true, force: true });
   await server?.close();
   server = undefined;
+});
+
+describe('handleRoleClosureCheck — derivation atomicity', () => {
+  it('records neither the closure nor its derivation when an effect of them fails', async () => {
+    // A phrase the list settles for free, so this whole test runs offline.
+    server = await startFixtureServer({ '/job': '<html><body><p>This job has been filled.</p></body></html>' });
+    const role = createRole(db, { url: `${server.url}/job` });
+
+    // Break the notification enqueue from under the handler. The derivation
+    // row is the claim "this page text has been judged", and the next check
+    // skips the model on the strength of it — so writing it while the
+    // closure notification was still missing would leave a role that is
+    // closed, known to be closed, and never reported.
+    db.exec('DROP TABLE jobs');
+
+    await expect(handleRoleClosureCheck(db, role.id)).rejects.toThrow();
+
+    expect(getDerivation(db, 'role', role.id, 'role_closure')).toBeUndefined();
+    expect(getRoleById(db, role.id)!.closed_at).toBeNull();
+    expect(getRoleById(db, role.id)!.last_checked_at).toBeNull();
+  });
+});
+
+describe('handleRoleClosureCheck — derivation freshness', () => {
+  it('skips the model entirely on a second check of an unchanged page', async () => {
+    // A page that says nothing conclusive, so the phrase list cannot settle
+    // it and the model is the only way to a first verdict.
+    server = await startFixtureServer({ '/job': '<html><body><p>Senior Engineer. We are hiring.</p></body></html>' });
+    const url = `${server.url}/job`;
+    const role = createRole(db, { url });
+
+    // Seed the verdict by hand rather than paying for a live call: what is
+    // under test is that an unchanged page reaches no model at all.
+    const snapshot = await snapshotPage(db, url, { kind: 'role' });
+    upsertDerivation(db, {
+      entityType: 'role',
+      entityId: role.id,
+      kind: 'role_closure',
+      sourceKey: snapshot.text_hash!,
+      recipeVersion: combinedRecipeVersion([closurePhrasesPath, closureScriptPath]),
+    });
+
+    const start = Date.now();
+    await handleRoleClosureCheck(db, role.id);
+
+    // A live claude call takes seconds; this must stay fast.
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(getRoleById(db, role.id)!.closed_at).toBeNull();
+    // It still fetched — "has it closed" is a question about the live page —
+    // and still recorded that it looked.
+    expect(server.requests).toEqual(['/job', '/job']);
+    expect(getRoleById(db, role.id)!.last_checked_at).not.toBeNull();
+
+    const events = listEventsForEntity(db, 'role', role.id);
+    expect(events.some((event) => event.type === 'role.derivation_fresh')).toBe(true);
+  });
+
+  it('records a derivation for a phrase-decided closure, at no cost', async () => {
+    server = await startFixtureServer({ '/job': '<html><body><p>This job has been filled.</p></body></html>' });
+    const role = createRole(db, { url: `${server.url}/job` });
+
+    await handleRoleClosureCheck(db, role.id);
+
+    expect(getRoleById(db, role.id)!.closed_at).not.toBeNull();
+    expect(getDerivation(db, 'role', role.id, 'role_closure')).toMatchObject({ model: 'none', cost_usd: 0 });
+  });
 });
 
 describe('handleRoleClosureCheck — always re-fetches', () => {

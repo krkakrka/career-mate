@@ -89,5 +89,11 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
       .all() as Pick<Role, 'id' | 'title' | 'url' | 'reapply_after'>[]
   ).map(toReapplyRole);
 
-  return { statusCounts, staleRoles, overdueRecruiterContacts, reapplyReady, reapplyUpcoming };
+  return {
+    statusCounts,
+    staleRoles,
+    overdueRecruiterContacts,
+    reapplyReady,
+    reapplyUpcoming,
+  };
 }

@@ -7,6 +7,9 @@ import { DuplicateError } from '../../db/errors.js';
 import { recordEvent } from '../../db/repositories/events.js';
 import { enqueueJob, type JobRecord } from '../../db/repositories/jobs.js';
 import { createRole } from '../../db/repositories/roles.js';
+import { contextKey, recipeVersion } from '../../derive/keys.js';
+import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
+import { recordDerivation } from '../../derive/record.js';
 import { runExtraction } from '../../enrichment/claude-extract.js';
 import { matchesPreferences } from '../../domain/preference-match.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
@@ -30,10 +33,10 @@ export async function handleDiscoveryJob(db: Database.Database, job: JobRecord):
   if (payload.kind !== 'company-discover') {
     throw new Error(`Unknown discovery job payload: ${job.payload}`);
   }
-  await handleCompanyDiscover(db, payload.companyId);
+  await handleCompanyDiscover(db, payload.companyId, job.id);
 }
 
-async function handleCompanyDiscover(db: Database.Database, companyId: number): Promise<void> {
+async function handleCompanyDiscover(db: Database.Database, companyId: number, jobId: number): Promise<void> {
   const company = getCompanyById(db, companyId);
   if (!company) throw new Error(`Company #${companyId} not found`);
 
@@ -44,7 +47,22 @@ async function handleCompanyDiscover(db: Database.Database, companyId: number): 
     preferences,
   });
 
-  const extraction = (await runExtraction(discoverScript, [], context)) as DiscoverExtraction;
+  const { data, usage } = await runExtraction(discoverScript, [], context);
+  const extraction = data as DiscoverExtraction;
+
+  // Recorded for spend reporting only — discover is never skipped as
+  // "fresh". Its whole job is to find postings that did not exist last
+  // time, and its context (the company and your preferences) barely
+  // changes, so a freshness gate would make the command a permanent no-op.
+  recordDerivation(db, {
+    entityType: 'company',
+    entityId: companyId,
+    kind: 'company_discover',
+    key: { sourceKey: contextKey(context), recipeVersion: recipeVersion(discoverScript) },
+    usage,
+    jobId,
+  });
+
   applyDiscoveredRoles(db, companyId, extraction, preferences);
 }
 
@@ -78,7 +96,7 @@ export function applyDiscoveredRoles(
 
     try {
       const role = createRole(db, { companyId, url });
-      enqueueJob(db, { topic: 'enrichment', payload: { kind: 'role-structural', roleId: role.id } });
+      enqueueJob(db, { topic: 'enrichment', payload: roleStructuralPayload(role.id) });
       recordEvent(db, {
         entityType: 'role',
         entityId: role.id,

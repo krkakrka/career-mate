@@ -1,8 +1,12 @@
 import { fileURLToPath } from 'node:url';
-import { runExtraction } from '../enrichment/claude-extract.js';
+import { runExtraction, type ExtractionUsage } from '../enrichment/claude-extract.js';
 import phraseList from './closure-phrases.json' with { type: 'json' };
 
-const defaultClosureScript = fileURLToPath(
+/** Exported so the refresh handler can hash it for the derivation's recipe_version. */
+/** Exported so the recipe hash can cover the phrase list, which is half the decision procedure. */
+export const closurePhrasesPath = fileURLToPath(new URL('./closure-phrases.json', import.meta.url));
+
+export const closureScriptPath = fileURLToPath(
   new URL('../enrichment/scripts/extract-closure-status.sh', import.meta.url),
 );
 
@@ -15,6 +19,8 @@ export interface ClosureVerdict {
   status: ClosureStatus;
   reason: string | null;
   source: ClosureSource;
+  /** Absent for a phrase match, which spends nothing. */
+  usage?: ExtractionUsage;
 }
 
 interface ClosureExtraction {
@@ -71,15 +77,13 @@ export async function decideClosure(text: string, options: DecideClosureOptions 
     return { status: 'closed', reason: `page text contains "${phrase}"`, source: 'phrase' };
   }
 
-  const extraction = (await runExtraction(
-    options.scriptPath ?? defaultClosureScript,
-    [],
-    text,
-  )) as ClosureExtraction;
+  const { data, usage } = await runExtraction(options.scriptPath ?? closureScriptPath, [], text);
+  const extraction = data as ClosureExtraction;
 
   return {
     status: extraction.status === 'closed' || extraction.status === 'open' ? extraction.status : 'unknown',
     reason: extraction.reason ?? null,
     source: 'model',
+    usage,
   };
 }

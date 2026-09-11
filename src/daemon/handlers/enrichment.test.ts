@@ -10,6 +10,8 @@ import type { JobRecord } from '../../db/repositories/jobs.js';
 import { createRole, getRoleById } from '../../db/repositories/roles.js';
 import { handleEnrichmentJob, resolveRoleCompany } from './enrichment.js';
 import { restoreEnv } from '../../../test/helpers/env.js';
+import { startFixtureServer } from '../../../test/helpers/fixture-server.js';
+import { getDerivation } from '../../db/repositories/derivations.js';
 
 function fakeJob(payload: unknown): JobRecord {
   return {
@@ -134,4 +136,41 @@ describe('company-wlb job — no urlTemplate configured (the shipped default)', 
     expect(skipped).toBeDefined();
     expect(JSON.parse(skipped!.context!).reason).toMatch(/urlTemplate/);
   });
+});
+
+describe('derivation atomicity', () => {
+  // Tagged live: reaching the transaction at all requires the structural
+  // extraction to run, and there is no CM_CLAUDE_BIN override until Step
+  // 18. `refresh.test.ts` covers the same invariant offline via the
+  // phrase-match path.
+  it('live: does not record a structural derivation when an effect of it fails', async () => {
+    // The derivation row is the claim "this input has been fully
+    // processed", and the next run skips the model on the strength of it.
+    // If it could be written while an effect was still missing, a transient
+    // failure would leave a role permanently half-enriched: the retry sees
+    // a fresh derivation and skips everything. This reproduces that by
+    // making one of the effects fail.
+    const server = await startFixtureServer({
+      '/jobs/1': '<html><body><h1>Engineer</h1><p>Company homepage: https://globex.example.com</p></body></html>',
+    });
+
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/1` });
+
+      // Break company resolution from under the handler: companies.url is
+      // NOT NULL, so an insert of the resolved company throws inside the
+      // transaction.
+      db.exec('DROP TABLE companies');
+
+      await expect(handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }))).rejects.toThrow();
+
+      // Nothing recorded means the retry does the work again, rather than
+      // skipping it as already derived.
+      expect(getDerivation(db, 'role', role.id, 'role_structural')).toBeUndefined();
+      // And the partial value was rolled back with it.
+      expect(getRoleById(db, role.id)!.title).toBeNull();
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
 });

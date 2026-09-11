@@ -6,13 +6,20 @@ const fakeScript = fileURLToPath(new URL('../../test/fixtures/fake-claude-envelo
 
 describe('runExtraction', () => {
   it('parses a fenced JSON result (```json ... ```)', async () => {
-    const result = await runExtraction(fakeScript, ['fenced'], '');
-    expect(result).toEqual({ name: 'Test Co', description: 'A test.' });
+    const { data } = await runExtraction(fakeScript, ['fenced'], '');
+    expect(data).toEqual({ name: 'Test Co', description: 'A test.' });
   });
 
   it('parses an unfenced JSON result', async () => {
-    const result = await runExtraction(fakeScript, ['unfenced'], '');
-    expect(result).toEqual({ name: 'Test Co', description: 'A test.' });
+    const { data } = await runExtraction(fakeScript, ['unfenced'], '');
+    expect(data).toEqual({ name: 'Test Co', description: 'A test.' });
+  });
+
+  it('reports what the call cost, for the derivation row that records it', async () => {
+    const { usage } = await runExtraction(fakeScript, ['unfenced'], '');
+    // The fixture envelope carries no cost fields, which must read as zero
+    // spend rather than NaN — a missing field is not an unknown price.
+    expect(usage).toEqual({ model: null, costUsd: 0, inputTokens: null, outputTokens: null });
   });
 
   it('throws ExtractionError when the envelope reports is_error', async () => {

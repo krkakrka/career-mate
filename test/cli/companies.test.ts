@@ -36,11 +36,17 @@ describe('cm companies', () => {
     expect(result.stdout).toMatch(/no companies/i);
   });
 
-  it('rejects adding a duplicate URL', () => {
+  it('is idempotent: re-adding a tracked URL prints what is there and exits 0', () => {
     runCli(['companies', 'add', 'https://example.com'], { dataDir });
+
     const second = runCli(['companies', 'add', 'https://example.com'], { dataDir });
-    expect(second.exitCode).toBe(1);
-    expect(second.stderr).toMatch(/already tracked/i);
+
+    // `add` says "I want this tracked", and it already is — not an error.
+    expect(second.exitCode).toBe(0);
+    expect(second.stdout).toMatch(/already tracking company #1/i);
+
+    const list = runCli(['companies', 'list'], { dataDir });
+    expect(list.stdout.trim().split('\n')).toHaveLength(1);
   });
 
   it('rejects a non-http(s) url', () => {

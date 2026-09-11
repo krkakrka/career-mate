@@ -202,15 +202,14 @@ export function deriveText(html: string): string {
     decodeHtmlEntities(
       inlineAnchorHrefs(html.replace(/<!--[\s\S]*?-->/g, ' '))
         .replace(new RegExp(`<(${NOISE_TAGS})\\b[^>]*>[\\s\\S]*?</\\1>`, 'gi'), ' ')
-        // <head> is stripped after title/og extraction above: everything in
-        // it that carries text is already in the header block, and what's
-        // left (link/meta/base) contributes nothing but noise.
-        //
-        // </head> is optional in HTML and plenty of minified pages omit it,
-        // so <body> also terminates the strip. Without that fallback the
-        // head survives and <title> is emitted a second time in the body —
-        // a divergence in a function whose output is hashed.
-        .replace(/<head\b[^>]*>[\s\S]*?(?:<\/head>|(?=<body\b))/i, ' ')
+        // <title> is removed rather than the whole <head>: both <head> and
+        // </head> are optional in HTML5 and minifiers drop them, so any
+        // regex keyed on those boundaries silently fails to match and emits
+        // the title a second time in the body — a divergence in a function
+        // whose output is hashed. Nothing else in <head> needs removing:
+        // script/style/noscript/template are already gone as noise, and
+        // meta/link/base are void elements that contribute no text at all.
+        .replace(/<title\b[^>]*>[\s\S]*?<\/title>/gi, ' ')
         // Source whitespace collapses to spaces *before* any line break is
         // introduced: a newline in the markup is only pretty-printing, so a
         // <p> wrapped across three source lines is still one line of text.

@@ -7,11 +7,48 @@ export class ExtractionError extends Error {
   }
 }
 
+interface ClaudeUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
 interface ClaudeResultEnvelope {
   type?: string;
   subtype?: string;
   is_error?: boolean;
   result?: string;
+  total_cost_usd?: number;
+  usage?: ClaudeUsage;
+  modelUsage?: Record<string, unknown>;
+}
+
+/** What a call cost and who answered it — recorded on the `derivations` row beside the value it produced. */
+export interface ExtractionUsage {
+  model: string | null;
+  costUsd: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+export interface ExtractionResult {
+  /** The model's answer, parsed. Always a JSON object — never an array or primitive. */
+  data: unknown;
+  usage: ExtractionUsage;
+}
+
+/**
+ * `modelUsage` is keyed by model id, so its first key names the model that
+ * actually answered — more trustworthy than assuming a default, since the
+ * `claude` CLI may route a request elsewhere.
+ */
+function readUsage(envelope: ClaudeResultEnvelope): ExtractionUsage {
+  const modelIds = envelope.modelUsage ? Object.keys(envelope.modelUsage) : [];
+  return {
+    model: modelIds[0] ?? null,
+    costUsd: typeof envelope.total_cost_usd === 'number' ? envelope.total_cost_usd : 0,
+    inputTokens: typeof envelope.usage?.input_tokens === 'number' ? envelope.usage.input_tokens : null,
+    outputTokens: typeof envelope.usage?.output_tokens === 'number' ? envelope.usage.output_tokens : null,
+  };
 }
 
 /**
@@ -70,7 +107,7 @@ export async function runExtraction(
   scriptPath: string,
   args: string[],
   stdinContent: string,
-): Promise<unknown> {
+): Promise<ExtractionResult> {
   const stdout = await runScript(scriptPath, args, stdinContent);
 
   let envelope: ClaudeResultEnvelope;
@@ -99,5 +136,5 @@ export async function runExtraction(
     throw new ExtractionError("claude -p's answer was not a JSON object");
   }
 
-  return parsed;
+  return { data: parsed, usage: readUsage(envelope) };
 }

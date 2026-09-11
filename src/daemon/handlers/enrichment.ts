@@ -15,6 +15,8 @@ import {
   updateResearchFields as updateRoleResearchFields,
   updateStructuralFields as updateRoleStructuralFields,
 } from '../../db/repositories/roles.js';
+import { contextKey, recipeVersion, sha256 } from '../../derive/keys.js';
+import { recordDerivation, skipIfFresh } from '../../derive/record.js';
 import {
   COMPANY_STRUCTURAL_FIELDS,
   missingFields,
@@ -23,7 +25,14 @@ import {
   ROLE_STRUCTURAL_FIELDS,
 } from '../../derive/structural.js';
 import { runExtraction } from '../../enrichment/claude-extract.js';
+import { buildCompanyResearchContext, buildRoleResearchContext } from '../../enrichment/research-context.js';
 import { getSourceRecipe } from '../../enrichment/sources.js';
+import {
+  companyResearchPayload,
+  companyStructuralPayload,
+  companyWlbPayload,
+  roleResearchPayload,
+} from '../../domain/enrichment-payload.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
 import { readSnapshotHtml, readSnapshotText, snapshotPage } from '../../pages/store.js';
 import { recomputePriorityForCompanyRoles, recomputePriorityForRole } from '../../scoring/priority.js';
@@ -78,31 +87,55 @@ export async function handleEnrichmentJob(db: Database.Database, job: JobRecord)
 
   switch (payload.kind) {
     case 'company-structural':
-      await handleCompanyStructural(db, payload.companyId, payload.force ?? false);
+      await handleCompanyStructural(db, payload.companyId, payload.force ?? false, job.id);
       return;
     case 'role-structural':
-      await handleRoleStructural(db, payload.roleId, payload.force ?? false);
+      await handleRoleStructural(db, payload.roleId, payload.force ?? false, job.id);
       return;
     case 'role-research':
-      await handleRoleResearch(db, payload.roleId);
+      await handleRoleResearch(db, payload.roleId, job.id);
       return;
     case 'company-research':
-      await handleCompanyResearch(db, payload.companyId);
+      await handleCompanyResearch(db, payload.companyId, job.id);
       return;
     case 'company-wlb':
-      await handleCompanyWlb(db, payload.companyId);
+      await handleCompanyWlb(db, payload.companyId, job.id);
       return;
     default:
       throw new Error(`Unknown enrichment job payload: ${job.payload}`);
   }
 }
 
-async function handleCompanyStructural(db: Database.Database, companyId: number, force: boolean): Promise<void> {
+async function handleCompanyStructural(
+  db: Database.Database,
+  companyId: number,
+  force: boolean,
+  jobId: number,
+): Promise<void> {
   const company = getCompanyById(db, companyId);
   if (!company) throw new Error(`Company #${companyId} not found`);
 
   const snapshot = await snapshotPage(db, company.url, { kind: 'company', force });
   const text = readSnapshotText(snapshot);
+  const key = { sourceKey: snapshot.text_hash!, recipeVersion: recipeVersion(structuralScript) };
+
+  // Nothing about the input or the recipe changed, so the answer would be
+  // identical — the chained research jobs below still run, since their own
+  // freshness is their own question.
+  //
+  // `force` bypasses this. The Phase 2 model says --force means only "take
+  // a new snapshot", on the reasoning that a changed snapshot makes
+  // derivations stale by itself — but that leaves no way at all to redo an
+  // extraction the model simply got wrong, because re-fetching an unchanged
+  // page produces the same text hash and skips. A user asking to re-fetch
+  // and re-enrich is asking for the value to be recomputed; the command
+  // saying "Re-enrichment queued" while deriving nothing is worse than the
+  // small extra cost. (Correction recorded in PLAN.md's model section.)
+  if (!force && skipIfFresh(db, 'company', companyId, 'company_structural', key)) {
+    enqueueJob(db, { topic: 'enrichment', payload: companyResearchPayload(companyId) });
+    enqueueJob(db, { topic: 'enrichment', payload: companyWlbPayload(companyId) });
+    return;
+  }
 
   // What the page states about itself is free and more reliable than a
   // model's reading of it; the model is asked only for the remainder.
@@ -112,34 +145,52 @@ async function handleCompanyStructural(db: Database.Database, companyId: number,
   // `description`), and kept deliberately: it is what makes adding one
   // later skip the call rather than silently re-ask for every field, since
   // an empty field list makes the script fall back to all of them.
-  const extraction = wanted.length
-    ? ((await runExtraction(structuralScript, ['company', wanted.join(',')], text)) as CompanyStructuralExtraction)
-    : {};
+  const result = wanted.length ? await runExtraction(structuralScript, ['company', wanted.join(',')], text) : undefined;
+  const extraction = (result?.data ?? {}) as CompanyStructuralExtraction;
 
   const name = prefill.name ?? extraction.name ?? null;
 
-  updateCompanyStructuralFields(db, companyId, {
-    name,
-    description: extraction.description ?? null,
-  });
+  // See handleRoleStructural: the derivation row goes last, inside the
+  // transaction, so it can never claim work that did not fully land.
+  const apply = db.transaction(() => {
+    updateCompanyStructuralFields(db, companyId, {
+      name,
+      description: extraction.description ?? null,
+    });
 
-  recordEvent(db, {
-    entityType: 'company',
-    entityId: companyId,
-    type: 'company.structural_fetch_completed',
-    context: { name, modelFields: wanted },
-  });
+    recordEvent(db, {
+      entityType: 'company',
+      entityId: companyId,
+      type: 'company.structural_fetch_completed',
+      context: { name, modelFields: wanted },
+    });
 
-  recomputePriorityForCompanyRoles(db, companyId);
+    recomputePriorityForCompanyRoles(db, companyId);
+
+    recordDerivation(db, {
+      entityType: 'company',
+      entityId: companyId,
+      kind: 'company_structural',
+      key,
+      usage: result?.usage,
+      jobId,
+    });
+  });
+  apply.immediate();
 
   // Structural fetch is the fast/cheap pass; full research follows
   // automatically, per the architecture (fast structural now, deeper
   // research as a separate job after).
-  enqueueJob(db, { topic: 'enrichment', payload: { kind: 'company-research', companyId } });
-  enqueueJob(db, { topic: 'enrichment', payload: { kind: 'company-wlb', companyId } });
+  enqueueJob(db, { topic: 'enrichment', payload: companyResearchPayload(companyId) });
+  enqueueJob(db, { topic: 'enrichment', payload: companyWlbPayload(companyId) });
 }
 
-async function handleRoleStructural(db: Database.Database, roleId: number, force: boolean): Promise<void> {
+async function handleRoleStructural(
+  db: Database.Database,
+  roleId: number,
+  force: boolean,
+  jobId: number,
+): Promise<void> {
   const role = getRoleById(db, roleId);
   if (!role) throw new Error(`Role #${roleId} not found`);
 
@@ -148,35 +199,61 @@ async function handleRoleStructural(db: Database.Database, roleId: number, force
   // whether to resolve a company; re-read fresh right before that check.
   const snapshot = await snapshotPage(db, role.url, { kind: 'role', force });
   const text = readSnapshotText(snapshot);
+  const key = { sourceKey: snapshot.text_hash!, recipeVersion: recipeVersion(structuralScript) };
+
+  // See handleCompanyStructural on why `force` bypasses the freshness skip.
+  if (!force && skipIfFresh(db, 'role', roleId, 'role_structural', key)) {
+    enqueueJob(db, { topic: 'enrichment', payload: roleResearchPayload(roleId) });
+    return;
+  }
 
   const prefill = prefillRoleStructural(readSnapshotHtml(snapshot));
   const wanted = missingFields(ROLE_STRUCTURAL_FIELDS, prefill);
   // See the note in handleCompanyStructural on the empty-`wanted` branch.
-  const extraction = wanted.length
-    ? ((await runExtraction(structuralScript, ['role', wanted.join(',')], text)) as RoleStructuralExtraction)
-    : {};
+  const result = wanted.length ? await runExtraction(structuralScript, ['role', wanted.join(',')], text) : undefined;
+  const extraction = (result?.data ?? {}) as RoleStructuralExtraction;
 
   const title = prefill.title ?? extraction.title ?? null;
 
-  updateRoleStructuralFields(db, roleId, {
-    title,
-    description: extraction.description ?? null,
+  // Everything this derivation produced lands in one transaction, with the
+  // derivation row written LAST and inside it. The row is the claim "this
+  // input has been fully processed", so it must not become true while any
+  // effect of processing is still missing: recording it earlier meant a
+  // transient failure in company resolution left a role permanently
+  // unresolved, because the retry saw a fresh derivation and skipped
+  // everything. (Observed as a real test failure, not a hypothetical.)
+  const apply = db.transaction(() => {
+    updateRoleStructuralFields(db, roleId, {
+      title,
+      description: extraction.description ?? null,
+    });
+
+    recordEvent(db, {
+      entityType: 'role',
+      entityId: roleId,
+      type: 'role.structural_fetch_completed',
+      context: { title, modelFields: wanted },
+    });
+
+    const currentRole = getRoleById(db, roleId);
+    if (currentRole?.company_id == null) {
+      resolveRoleCompany(db, roleId, extraction);
+    }
+
+    recomputePriorityForRole(db, roleId);
+
+    recordDerivation(db, {
+      entityType: 'role',
+      entityId: roleId,
+      kind: 'role_structural',
+      key,
+      usage: result?.usage,
+      jobId,
+    });
   });
+  apply.immediate();
 
-  recordEvent(db, {
-    entityType: 'role',
-    entityId: roleId,
-    type: 'role.structural_fetch_completed',
-    context: { title, modelFields: wanted },
-  });
-
-  const currentRole = getRoleById(db, roleId);
-  if (currentRole?.company_id == null) {
-    resolveRoleCompany(db, roleId, extraction);
-  }
-
-  recomputePriorityForRole(db, roleId);
-  enqueueJob(db, { topic: 'enrichment', payload: { kind: 'role-research', roleId } });
+  enqueueJob(db, { topic: 'enrichment', payload: roleResearchPayload(roleId) });
 }
 
 /** Exported for direct testing of the resolution logic (valid/invalid/missing companyUrl, race guard) without needing a real claude -p call. */
@@ -227,7 +304,7 @@ export function resolveRoleCompany(db: Database.Database, roleId: number, extrac
     // The role page only told us the company's name — enqueue a proper
     // structural fetch against its own homepage for a real description
     // (which itself chains into company-research/company-wlb on completion).
-    enqueueJob(db, { topic: 'enrichment', payload: { kind: 'company-structural', companyId: company.id } });
+    enqueueJob(db, { topic: 'enrichment', payload: companyStructuralPayload(company.id) });
   }
 }
 
@@ -244,74 +321,81 @@ function normalizeRemoteEu(value: string | null | undefined): 'yes' | 'no' | 'un
 // fetch's pattern) is a reasonable future addition once a real template
 // exists, but building it against a hypothetical is premature — nothing
 // supplies one yet.
-async function handleRoleResearch(db: Database.Database, roleId: number): Promise<void> {
+async function handleRoleResearch(db: Database.Database, roleId: number, jobId: number): Promise<void> {
   const role = getRoleById(db, roleId);
   if (!role) throw new Error(`Role #${roleId} not found`);
 
-  const company = role.company_id != null ? getCompanyById(db, role.company_id) : undefined;
   const recipe = getSourceRecipe('role_research');
-  const context = JSON.stringify({
-    title: role.title,
-    description: role.description,
-    companyName: company?.name ?? null,
-    roleUrl: role.url,
-  });
+  const context = buildRoleResearchContext(db, role);
 
-  const extraction = (await runExtraction(
-    researchWebScript,
-    ['role', recipe.instructions],
-    context,
-  )) as RoleResearchExtraction;
+  // These kinds read no page, so their input is the context JSON itself —
+  // hashing the exact string piped in means the key changes when, and only
+  // when, what the model saw changed.
+  const key = { sourceKey: contextKey(context), recipeVersion: recipeVersion(researchWebScript) };
+  if (skipIfFresh(db, 'role', roleId, 'role_research', key)) return;
+
+  const { data, usage } = await runExtraction(researchWebScript, ['role', recipe.instructions], context);
+  const extraction = data as RoleResearchExtraction;
 
   const salaryMin = typeof extraction.salaryMin === 'number' ? extraction.salaryMin : null;
   const salaryMax = typeof extraction.salaryMax === 'number' ? extraction.salaryMax : null;
 
-  updateRoleResearchFields(db, roleId, {
-    salaryMin,
-    salaryMax,
-    equity: extraction.equity ?? null,
-    remoteEu: normalizeRemoteEu(extraction.remoteEu),
-  });
+  const apply = db.transaction(() => {
+    updateRoleResearchFields(db, roleId, {
+      salaryMin,
+      salaryMax,
+      equity: extraction.equity ?? null,
+      remoteEu: normalizeRemoteEu(extraction.remoteEu),
+    });
 
-  recordEvent(db, {
-    entityType: 'role',
-    entityId: roleId,
-    type: 'role.research_completed',
-    context: { salaryMin, salaryMax, remoteEu: normalizeRemoteEu(extraction.remoteEu) },
-  });
+    recordEvent(db, {
+      entityType: 'role',
+      entityId: roleId,
+      type: 'role.research_completed',
+      context: { salaryMin, salaryMax, remoteEu: normalizeRemoteEu(extraction.remoteEu) },
+    });
 
-  recomputePriorityForRole(db, roleId);
+    recomputePriorityForRole(db, roleId);
+
+    recordDerivation(db, { entityType: 'role', entityId: roleId, kind: 'role_research', key, usage, jobId });
+  });
+  apply.immediate();
 }
 
-async function handleCompanyResearch(db: Database.Database, companyId: number): Promise<void> {
+async function handleCompanyResearch(db: Database.Database, companyId: number, jobId: number): Promise<void> {
   const company = getCompanyById(db, companyId);
   if (!company) throw new Error(`Company #${companyId} not found`);
 
   const recipe = getSourceRecipe('company_research');
-  const context = JSON.stringify({ name: company.name, url: company.url, description: company.description });
+  const context = buildCompanyResearchContext(company);
 
-  const extraction = (await runExtraction(
-    researchWebScript,
-    ['company', recipe.instructions],
-    context,
-  )) as CompanyResearchExtraction;
+  const key = { sourceKey: contextKey(context), recipeVersion: recipeVersion(researchWebScript) };
+  if (skipIfFresh(db, 'company', companyId, 'company_research', key)) return;
+
+  const { data, usage } = await runExtraction(researchWebScript, ['company', recipe.instructions], context);
+  const extraction = data as CompanyResearchExtraction;
 
   const aiProofScore = typeof extraction.aiProofScore === 'number' ? extraction.aiProofScore : null;
 
-  updateCompanyResearchFields(db, companyId, {
-    ipoStatus: extraction.ipoStatus ?? null,
-    aiProofScore,
-    aiProofNotes: extraction.aiProofNotes ?? null,
-  });
+  const apply = db.transaction(() => {
+    updateCompanyResearchFields(db, companyId, {
+      ipoStatus: extraction.ipoStatus ?? null,
+      aiProofScore,
+      aiProofNotes: extraction.aiProofNotes ?? null,
+    });
 
-  recordEvent(db, {
-    entityType: 'company',
-    entityId: companyId,
-    type: 'company.research_completed',
-    context: { ipoStatus: extraction.ipoStatus ?? null, aiProofScore },
-  });
+    recordEvent(db, {
+      entityType: 'company',
+      entityId: companyId,
+      type: 'company.research_completed',
+      context: { ipoStatus: extraction.ipoStatus ?? null, aiProofScore },
+    });
 
-  recomputePriorityForCompanyRoles(db, companyId);
+    recomputePriorityForCompanyRoles(db, companyId);
+
+    recordDerivation(db, { entityType: 'company', entityId: companyId, kind: 'company_research', key, usage, jobId });
+  });
+  apply.immediate();
 }
 
 function slugify(value: string): string {
@@ -326,7 +410,7 @@ function substituteTemplate(template: string, vars: Record<string, string>): str
   return template.replace(/\{(\w+)\}/g, (_match, key: string) => vars[key] ?? '');
 }
 
-async function handleCompanyWlb(db: Database.Database, companyId: number): Promise<void> {
+async function handleCompanyWlb(db: Database.Database, companyId: number, jobId: number): Promise<void> {
   const company = getCompanyById(db, companyId);
   if (!company) throw new Error(`Company #${companyId} not found`);
 
@@ -355,21 +439,33 @@ async function handleCompanyWlb(db: Database.Database, companyId: number): Promi
     companySlug: slugify(company.name ?? ''),
   });
   const html = await fetchAuthenticatedPage(url);
-  const extraction = (await runExtraction(extractWlbScript, [], html)) as WlbExtraction;
+  // The only fetch that does not go through the page store (it needs the
+  // authenticated browser profile), so its source key is the hash of the
+  // HTML it returned rather than a snapshot's text_hash.
+  const key = { sourceKey: sha256(html), recipeVersion: recipeVersion(extractWlbScript) };
+  if (skipIfFresh(db, 'company', companyId, 'company_wlb', key)) return;
+
+  const { data, usage } = await runExtraction(extractWlbScript, [], html);
+  const extraction = data as WlbExtraction;
 
   const wlbScore = typeof extraction.wlbScore === 'number' ? extraction.wlbScore : null;
 
-  updateCompanyResearchFields(db, companyId, {
-    wlbScore,
-    wlbNotes: extraction.wlbNotes ?? null,
-  });
+  const apply = db.transaction(() => {
+    updateCompanyResearchFields(db, companyId, {
+      wlbScore,
+      wlbNotes: extraction.wlbNotes ?? null,
+    });
 
-  recordEvent(db, {
-    entityType: 'company',
-    entityId: companyId,
-    type: 'company.wlb_completed',
-    context: { wlbScore },
-  });
+    recordEvent(db, {
+      entityType: 'company',
+      entityId: companyId,
+      type: 'company.wlb_completed',
+      context: { wlbScore },
+    });
 
-  recomputePriorityForCompanyRoles(db, companyId);
+    recomputePriorityForCompanyRoles(db, companyId);
+
+    recordDerivation(db, { entityType: 'company', entityId: companyId, kind: 'company_wlb', key, usage, jobId });
+  });
+  apply.immediate();
 }

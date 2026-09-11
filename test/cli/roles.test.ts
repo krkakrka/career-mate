@@ -36,24 +36,30 @@ describe('cm roles', () => {
     expect(result.stderr).toMatch(/company #999 not found/i);
   });
 
-  it('blocks a duplicate-looking url without --force, allows it with --force', () => {
+  it('is idempotent: re-adding the same url prints what is there and adds no second row', () => {
     runCli(['roles', 'add', 'https://example.com/jobs/1', '--company', '1'], { dataDir });
 
-    const blocked = runCli(['roles', 'add', 'https://example.com/jobs/1/', '--company', '1'], {
-      dataDir,
-    });
-    expect(blocked.exitCode).toBe(1);
-    expect(blocked.stderr).toMatch(/already tracks.*force/i);
+    // Trailing slash — the same URL, by the same normalization the
+    // duplicate check uses.
+    const second = runCli(['roles', 'add', 'https://example.com/jobs/1/', '--company', '1'], { dataDir });
 
-    const forced = runCli(
-      ['roles', 'add', 'https://example.com/jobs/1/', '--company', '1', '--force'],
-      { dataDir },
-    );
-    expect(forced.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
+    expect(second.stdout).toMatch(/already tracking role #1/i);
+    expect(runCli(['roles', 'list'], { dataDir }).stdout.trim().split('\n')).toHaveLength(1);
+  });
 
-    const list = runCli(['roles', 'list'], { dataDir });
-    const roleLines = list.stdout.trim().split('\n');
-    expect(roleLines).toHaveLength(2);
+  it('still tracks the same URL separately under a different company', () => {
+    runCli(['companies', 'add', 'https://other.example.com'], { dataDir });
+    runCli(['roles', 'add', 'https://example.com/jobs/1', '--company', '1'], { dataDir });
+
+    // Mirrored postings and recruiting agencies genuinely put one URL under
+    // two employers, so idempotency is scoped the same way the duplicate
+    // check is — by company when one is given.
+    const second = runCli(['roles', 'add', 'https://example.com/jobs/1', '--company', '2'], { dataDir });
+
+    expect(second.exitCode).toBe(0);
+    expect(second.stdout).toMatch(/added role #2/i);
+    expect(runCli(['roles', 'list'], { dataDir }).stdout.trim().split('\n')).toHaveLength(2);
   });
 
   it('records a status change with context in the history', () => {

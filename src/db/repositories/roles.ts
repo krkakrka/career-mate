@@ -97,6 +97,31 @@ function findDuplicateRole(
   return rows.find((role) => normalizeUrl(role.url) === normalized);
 }
 
+/**
+ * The role already tracking this URL, if any — the lookup that makes
+ * `cm roles add` idempotent.
+ *
+ * Scoped exactly like `findDuplicateRole`: by company when one is given,
+ * globally when the company is still unresolved. The two must agree, or
+ * `add` would report "already tracking" for something the duplicate check
+ * considers a different role (or vice versa). In particular this preserves
+ * the documented case that the same URL under two different companies is
+ * legitimate — mirrored postings, recruiting agencies.
+ */
+export function findRoleByUrl(
+  db: Database.Database,
+  url: string,
+  companyId?: number | null,
+): Role | undefined {
+  const normalized = normalizeUrl(url);
+  const rows = (
+    companyId != null
+      ? db.prepare('SELECT * FROM roles WHERE company_id = ? ORDER BY id ASC').all(companyId)
+      : db.prepare('SELECT * FROM roles ORDER BY id ASC').all()
+  ) as Role[];
+  return rows.find((role) => normalizeUrl(role.url) === normalized);
+}
+
 export function createRole(db: Database.Database, options: CreateRoleOptions): Role {
   // The duplicate check (SELECT existing roles, compare, then INSERT) has no
   // DB-level constraint backing it up now that UNIQUE(company_id, url) is
@@ -113,9 +138,11 @@ export function createRole(db: Database.Database, options: CreateRoleOptions): R
     if (!options.force) {
       const match = findDuplicateRole(db, options.companyId, options.url);
       if (match) {
-        throw new DuplicateError(
-          `Role #${match.id} already tracks a URL that looks the same (${match.url}). Use --force to add anyway.`,
-        );
+        // Reachable from `discover`, which creates roles from URLs it
+        // found. `cm roles add` no longer hits this: it looks the URL up
+        // first (findRoleByUrl, same scoping) and prints the existing role
+        // instead of failing.
+        throw new DuplicateError(`Role #${match.id} already tracks a URL that looks the same (${match.url}).`);
       }
     }
 

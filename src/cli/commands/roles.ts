@@ -5,6 +5,7 @@ import { listInterviewNotes } from '../../db/repositories/interview-notes.js';
 import { listRecruiterContacts } from '../../db/repositories/recruiter-contacts.js';
 import {
   createRole,
+  findRoleByUrl,
   getRoleById,
   getStatusHistory,
   listRoles,
@@ -12,8 +13,10 @@ import {
   setStatus,
   type Role,
 } from '../../db/repositories/roles.js';
+import { markersByKind, roleFieldGroupStatus } from '../../derive/view-staleness.js';
 import { ROLE_STATUSES } from '../../domain/role-status.js';
-import { enqueueEnrichment } from '../enqueue-enrichment.js';
+import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
+import { enqueueEnrichment, enqueueRecomputesAndRun } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
 import {
   parseDate,
@@ -25,15 +28,22 @@ import {
 
 const KNOWN_ERRORS = [DuplicateError, NotFoundError];
 
-function printRoleDetail(role: Role): void {
-  console.log(`#${role.id} ${role.title ?? '(untitled — not yet fetched)'}`);
+function suffix(marker: string | undefined): string {
+  return marker ? `  ${marker}` : '';
+}
+
+function printRoleDetail(role: Role, markers: Map<string, string>): void {
+  const structural = suffix(markers.get('role_structural'));
+  const research = suffix(markers.get('role_research'));
+
+  console.log(`#${role.id} ${role.title ?? '(untitled — not yet fetched)'}${structural}`);
   console.log(`Company: ${role.company_id !== null ? `#${role.company_id}` : '(resolving in the background)'}`);
   console.log(`URL: ${role.url}`);
   console.log(`Status: ${role.status} (since ${role.status_changed_at})`);
   console.log(`Reapply after: ${role.reapply_after ?? '(none)'}`);
-  console.log(`Salary: ${role.salary_min ?? '?'} - ${role.salary_max ?? '?'}`);
-  console.log(`Equity: ${role.equity ?? '(unknown)'}`);
-  console.log(`Remote/EU: ${role.remote_eu ?? '(unknown)'}`);
+  console.log(`Salary: ${role.salary_min ?? '?'} - ${role.salary_max ?? '?'}${research}`);
+  console.log(`Equity: ${role.equity ?? '(unknown)'}${research}`);
+  console.log(`Remote/EU: ${role.remote_eu ?? '(unknown)'}${research}`);
   console.log(`Priority score: ${role.priority_score ?? '(not yet scored)'}`);
   console.log(`Created: ${role.created_at}`);
 }
@@ -48,12 +58,31 @@ export function registerRolesCommand(program: Command): void {
     )
     .argument('<url>', 'Role URL', parseHttpUrl)
     .option('--company <id>', 'Company id this role belongs to (auto-resolved from the page if omitted)', parsePositiveInt)
-    .option('--force', 'Add even if it looks like a duplicate of an existing role')
+    .option('--force', 'Take a new snapshot of the page now, ignoring settings.page_refresh_days')
     .action((url: string, opts: { company?: number; force?: boolean }) => {
       reportKnownErrors(KNOWN_ERRORS, () => {
         const db = getDb();
-        const role = createRole(db, { companyId: opts.company ?? null, url, force: opts.force ?? false });
-        enqueueEnrichment(db, { kind: 'role-structural', roleId: role.id });
+
+        // Same URL already tracked (at this company, or anywhere if no
+        // company was given): not an error, and not a second row. This
+        // replaces the old `--force`-to-override duplicate block — `--force`
+        // now means what it means everywhere else, take a new snapshot.
+        const existing = findRoleByUrl(db, url, opts.company);
+        if (existing) {
+          if (!opts.force) {
+            console.log(`Already tracking role #${existing.id}: ${existing.url}`);
+            const groups = roleFieldGroupStatus(db, existing);
+            enqueueRecomputesAndRun(db, 'role', existing.id, groups);
+            printRoleDetail(existing, markersByKind(groups));
+            return;
+          }
+          enqueueEnrichment(db, roleStructuralPayload(existing.id, true));
+          console.log(`Re-fetching role #${existing.id}: ${existing.url} (in the background)`);
+          return;
+        }
+
+        const role = createRole(db, { companyId: opts.company ?? null, url });
+        enqueueEnrichment(db, roleStructuralPayload(role.id, opts.force ?? false));
         const companyNote =
           role.company_id !== null ? `company #${role.company_id}` : 'company resolving in the background';
         console.log(`Added role #${role.id} (${companyNote}): ${role.url}`);
@@ -82,10 +111,17 @@ export function registerRolesCommand(program: Command): void {
         return;
       }
       for (const role of rows) {
+        // Same lazy-recompute treatment as `companies list`: roles are the
+        // view looked at most, so leaving it out meant the primary daily
+        // list never showed a marker and never healed itself.
+        const groups = roleFieldGroupStatus(db, role);
+        enqueueRecomputesAndRun(db, 'role', role.id, groups);
+        const marker = groups.some((group) => group.marker === '(stale)') ? '  (stale)' : '';
+
         const companyLabel = role.company_id !== null ? `company#${role.company_id}` : 'company(pending)';
         const priorityLabel = role.priority_score != null ? `priority=${role.priority_score.toFixed(2)}` : 'priority=?';
         console.log(
-          `#${role.id}  ${role.title ?? '(untitled)'}  ${companyLabel}  status=${role.status}  ${priorityLabel}  ${role.url}`,
+          `#${role.id}  ${role.title ?? '(untitled)'}  ${companyLabel}  status=${role.status}  ${priorityLabel}  ${role.url}${marker}`,
         );
       }
     });
@@ -102,7 +138,9 @@ export function registerRolesCommand(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      printRoleDetail(role);
+      const groups = roleFieldGroupStatus(db, role);
+      enqueueRecomputesAndRun(db, 'role', role.id, groups);
+      printRoleDetail(role, markersByKind(groups));
 
       const history = getStatusHistory(db, id);
       if (history.length > 0) {
@@ -161,7 +199,7 @@ export function registerRolesCommand(program: Command): void {
 
   roles
     .command('rerun-enrichment')
-    .description('Re-fetch a role page (ignoring the snapshot refresh window) and re-run structural enrichment')
+    .description('Deprecated alias for `cm roles add <url> --force`')
     .argument('<id>', 'Role id', parsePositiveInt)
     .action((id: number) => {
       const db = getDb();
@@ -171,9 +209,8 @@ export function registerRolesCommand(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      // force: the point of the command is to go look at the page again —
-      // re-extracting the cached snapshot would make it a no-op.
-      enqueueEnrichment(db, { kind: 'role-structural', roleId: id, force: true });
+      enqueueEnrichment(db, roleStructuralPayload(id, true));
       console.log(`Re-enrichment queued for role #${id}.`);
+      console.log(`Note: rerun-enrichment is deprecated — \`cm roles add ${role.url} --force\` does the same thing.`);
     });
 }

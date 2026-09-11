@@ -43,9 +43,35 @@ async function pollUntil<T>(
     const value = read();
     if (value !== undefined && predicate(value)) return value;
     if (Date.now() > deadline) {
-      throw new Error(`Timed out after ${timeoutMs}ms waiting for condition. Last value: ${JSON.stringify(value)}`);
+      // The audit trail is the only record of *why* enrichment reached the
+      // state it did, and this temp dir is deleted on the way out — so a
+      // bare "timed out" here would throw the evidence away with it.
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for condition.\nLast value: ${JSON.stringify(value)}\n` +
+          `Events:\n${describeEvents()}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/** Dumps every event recorded against the roles/companies in play, for failure diagnosis. */
+function describeEvents(): string {
+  try {
+    const db = openDb(dbPath);
+    try {
+      const rows = db
+        .prepare('SELECT entity_type, entity_id, type, context, occurred_at FROM events ORDER BY id ASC')
+        .all() as { entity_type: string; entity_id: number; type: string; context: string | null; occurred_at: string }[];
+      if (rows.length === 0) return '  (none recorded)';
+      return rows
+        .map((row) => `  ${row.occurred_at}  ${row.entity_type}#${row.entity_id}  ${row.type}  ${row.context ?? ''}`)
+        .join('\n');
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    return `  (could not read events: ${error instanceof Error ? error.message : String(error)})`;
   }
 }
 

@@ -48,7 +48,7 @@ field_description() {
       ;;
     companyName) echo '- "companyName": the name of the company hiring, as stated on the page' ;;
     companyUrl)
-      echo '- "companyUrl": the company'"'"'s own homepage URL, if determinable from the page content or links. This must be the company'"'"'s own domain, NOT the job board or applicant-tracking-system domain the posting happens to be hosted on (e.g. not boards.greenhouse.io, jobs.lever.co, myworkdayjobs.com, ashbyhq.com, etc.) unless that genuinely is the company'"'"'s own domain.'
+      echo '- "companyUrl": the company'"'"'s own homepage URL. Take it from anywhere in the text: a link target, the header block, or a URL written as ordinary text (e.g. a line reading "Company homepage: https://..."). Prefer the company'"'"'s own domain over the job board or applicant-tracking-system domain the posting happens to be hosted on (e.g. boards.greenhouse.io, jobs.lever.co, myworkdayjobs.com, ashbyhq.com). If the page states a homepage URL anywhere, report it rather than returning null.'
       ;;
     *) echo "unknown field: $1" >&2; exit 1 ;;
   esac
@@ -71,7 +71,7 @@ if [ -z "$SHAPE" ]; then
   exit 1
 fi
 
-PROMPT="You are extracting structured data from ${CONTEXT}, piped to you via stdin. The text begins with a header block of \`key: value\` lines (title, canonical, og:* metadata) taken from the page's markup, then the page's visible text, with link targets written inline as \`Anchor text (https://...)\`. Base your answer only on the provided content — do not browse or search for anything else.
+PROMPT="You are extracting structured data from ${CONTEXT}, piped to you via stdin. The text is a plain-text rendering of the page: if the page declared any metadata it begins with a header block of \`key: value\` lines (title, canonical, og:*) followed by a blank line, then the page's visible text. Where the page contained a link, the link text is followed by its target in parentheses. URLs may equally appear as ordinary text anywhere in the page, with no link around them. Base your answer only on the provided content — do not browse or search for anything else.
 
 Extract:
 ${DESCRIPTIONS}

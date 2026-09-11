@@ -46,6 +46,41 @@ export function enqueueJob(db: Database.Database, params: EnqueueJobParams): Job
   return job;
 }
 
+/**
+ * Enqueues a job only if no live job with the same payload already exists.
+ *
+ * `show`/`list` enqueue a recompute for every stale field group they
+ * print, and those commands are run repeatedly — three `cm roles show`
+ * calls in a row must leave one job, not three. Matching is on the exact
+ * payload JSON of a pending-or-running job of the same topic, which is
+ * enough because every enqueue site builds its payload the same way.
+ *
+ * `failed` counts as existing, not just pending/running: a job that has
+ * exhausted its retries keeps failing, and without this every subsequent
+ * read would queue an identical one — which for a failure that happens
+ * *after* the model call means paying again on every `cm companies list`.
+ * Recovering from that state is an explicit `cm worker retry <id>`.
+ *
+ * Racy by construction: two processes can both see nothing and both
+ * insert. That is acceptable here in a way it is not for closure
+ * notifications — the cost of a duplicate is one redundant job that
+ * finds its derivation already fresh and returns without calling the
+ * model, not a duplicate user-visible event.
+ */
+export function enqueueJobOnce(db: Database.Database, params: EnqueueJobParams): JobRecord | undefined {
+  const payloadJson = JSON.stringify(params.payload ?? {});
+  const existing = db
+    .prepare(
+      `SELECT id FROM jobs
+       WHERE topic = ? AND payload = ? AND status IN ('pending', 'running', 'failed')
+       LIMIT 1`,
+    )
+    .get(params.topic, payloadJson) as { id: number } | undefined;
+
+  if (existing) return undefined;
+  return enqueueJob(db, params);
+}
+
 /** Best-effort entity inference from a job's own payload, for log correlation — never throws on malformed payload. */
 function entityOf(job: JobRecord): ReturnType<typeof inferJobEntity> {
   try {

@@ -60,6 +60,8 @@ describe('decideClosure', () => {
       reason: 'page text contains "this job has been filled"',
       source: 'phrase',
     });
+    // No usage at all, rather than a zero-cost one: nothing was called.
+    expect(verdict.usage).toBeUndefined();
   });
 
   it('sends a page the phrase list cannot settle to the model', async () => {
@@ -78,7 +80,7 @@ describe('decideClosure', () => {
     );
     fs.chmodSync(stub, 0o755);
 
-    expect(await decideClosure('An ambiguous page.', { scriptPath: stub })).toEqual({
+    expect(await decideClosure('An ambiguous page.', { scriptPath: stub })).toMatchObject({
       status: 'unknown',
       reason: 'unclear',
       source: 'model',
