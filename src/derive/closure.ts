@@ -12,7 +12,7 @@ export const closureScriptPath = fileURLToPath(
 
 export type ClosureStatus = 'open' | 'closed' | 'unknown';
 
-/** Which rule decided — `phrase` and `http-status` cost nothing, `model` costs a `claude` call. */
+/** Which rule decided: `phrase` costs nothing, `model` costs a `claude` call. (HTTP 404/410 is decided in the refresh handler, before any text exists.) */
 export type ClosureSource = 'phrase' | 'model';
 
 export interface ClosureVerdict {

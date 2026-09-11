@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
@@ -11,10 +10,8 @@ import { createCompany } from '../db/repositories/companies.js';
 import { upsertDerivation } from '../db/repositories/derivations.js';
 import { listJobs } from '../db/repositories/jobs.js';
 import { snapshotPage } from '../pages/store.js';
-import { recipeVersion } from './keys.js';
+import { structuralRecipeVersion } from './recipes.js';
 import { companyFieldGroupStatus, enqueueRecomputes } from './view-staleness.js';
-
-const structuralScript = fileURLToPath(new URL('../enrichment/scripts/extract-structural.sh', import.meta.url));
 
 let tempDir: string;
 let originalDataDir: string | undefined;
@@ -59,7 +56,7 @@ describe('companyFieldGroupStatus', () => {
       entityId: company.id,
       kind: 'company_structural',
       sourceKey: first.text_hash!,
-      recipeVersion: recipeVersion(structuralScript),
+      recipeVersion: structuralRecipeVersion(),
     });
 
     expect(kinds(companyFieldGroupStatus(db, company))).not.toContain('company_structural');

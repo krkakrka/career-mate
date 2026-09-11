@@ -8,6 +8,12 @@
 # Usage: extract-closure-status.sh   (page content piped via stdin)
 set -euo pipefail
 
+# The `claude` binary to run. Overridable so the test suite can substitute a
+# deterministic stand-in: without it every test that touches extraction is a
+# live, paid, network-dependent call, which is what kept real bugs hidden in
+# the noise of an intermittently failing suite.
+CLAUDE_BIN="${CM_CLAUDE_BIN:-claude}"
+
 PROMPT=$(cat <<'EOF'
 You are looking at a job posting page's content, piped to you via stdin. Determine whether this posting is still open and accepting applications, or has closed/expired/been filled. Base your answer only on the provided content — do not browse or search for anything else.
 
@@ -16,4 +22,4 @@ Use "unknown" only if the content genuinely doesn't let you tell (e.g. it's not 
 EOF
 )
 
-exec claude -p "$PROMPT" --output-format json
+exec "$CLAUDE_BIN" -p "$PROMPT" --output-format json

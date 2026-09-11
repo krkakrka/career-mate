@@ -4,6 +4,21 @@ import { extractOgMeta } from '../pages/text.js';
  * Fields the structural extraction can produce for each entity kind. The
  * order is the order they're described to the model.
  */
+/**
+ * Bump when the deterministic prefill rules below change what they produce.
+ *
+ * These rules are half the structural recipe (the free pass that runs before
+ * the model), so a change to them must invalidate the values they produced —
+ * otherwise adding, say, the JSON-LD `JobPosting.title` rule from the Backlog
+ * would apply only to entities added afterwards, silently leaving every
+ * existing role on the old behaviour.
+ *
+ * Hand-maintained rather than a hash of this file: a file hash would also
+ * fire on a comment or an unrelated refactor, and re-extracting every tracked
+ * entity costs real money. The version is the claim "the rules changed".
+ */
+export const PREFILL_RULES_VERSION = 1;
+
 export const ROLE_STRUCTURAL_FIELDS = ['title', 'description', 'companyName', 'companyUrl'] as const;
 export const COMPANY_STRUCTURAL_FIELDS = ['name', 'description'] as const;
 

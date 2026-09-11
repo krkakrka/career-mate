@@ -16,6 +16,7 @@ import {
   updateStructuralFields as updateRoleStructuralFields,
 } from '../../db/repositories/roles.js';
 import { contextKey, recipeVersion, sha256 } from '../../derive/keys.js';
+import { researchRecipeVersion, structuralRecipeVersion } from '../../derive/recipes.js';
 import { recordDerivation, skipIfFresh } from '../../derive/record.js';
 import {
   COMPANY_STRUCTURAL_FIELDS,
@@ -117,7 +118,7 @@ async function handleCompanyStructural(
 
   const snapshot = await snapshotPage(db, company.url, { kind: 'company', force });
   const text = readSnapshotText(snapshot);
-  const key = { sourceKey: snapshot.text_hash!, recipeVersion: recipeVersion(structuralScript) };
+  const key = { sourceKey: snapshot.text_hash!, recipeVersion: structuralRecipeVersion() };
 
   // Nothing about the input or the recipe changed, so the answer would be
   // identical — the chained research jobs below still run, since their own
@@ -199,7 +200,7 @@ async function handleRoleStructural(
   // whether to resolve a company; re-read fresh right before that check.
   const snapshot = await snapshotPage(db, role.url, { kind: 'role', force });
   const text = readSnapshotText(snapshot);
-  const key = { sourceKey: snapshot.text_hash!, recipeVersion: recipeVersion(structuralScript) };
+  const key = { sourceKey: snapshot.text_hash!, recipeVersion: structuralRecipeVersion() };
 
   // See handleCompanyStructural on why `force` bypasses the freshness skip.
   if (!force && skipIfFresh(db, 'role', roleId, 'role_structural', key)) {
@@ -331,7 +332,7 @@ async function handleRoleResearch(db: Database.Database, roleId: number, jobId: 
   // These kinds read no page, so their input is the context JSON itself —
   // hashing the exact string piped in means the key changes when, and only
   // when, what the model saw changed.
-  const key = { sourceKey: contextKey(context), recipeVersion: recipeVersion(researchWebScript) };
+  const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion() };
   if (skipIfFresh(db, 'role', roleId, 'role_research', key)) return;
 
   const { data, usage } = await runExtraction(researchWebScript, ['role', recipe.instructions], context);
@@ -369,7 +370,7 @@ async function handleCompanyResearch(db: Database.Database, companyId: number, j
   const recipe = getSourceRecipe('company_research');
   const context = buildCompanyResearchContext(company);
 
-  const key = { sourceKey: contextKey(context), recipeVersion: recipeVersion(researchWebScript) };
+  const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion() };
   if (skipIfFresh(db, 'company', companyId, 'company_research', key)) return;
 
   const { data, usage } = await runExtraction(researchWebScript, ['company', recipe.instructions], context);

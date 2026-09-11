@@ -3,6 +3,12 @@
 # Usage: research-discover.sh   (JSON context piped via stdin: {companyName, companyUrl, preferences})
 set -euo pipefail
 
+# The `claude` binary to run. Overridable so the test suite can substitute a
+# deterministic stand-in: without it every test that touches extraction is a
+# live, paid, network-dependent call, which is what kept real bugs hidden in
+# the noise of an intermittently failing suite.
+CLAUDE_BIN="${CM_CLAUDE_BIN:-claude}"
+
 CONTEXT=$(cat)
 
 PROMPT=$(cat <<EOF
@@ -14,4 +20,4 @@ Respond with ONLY a JSON object, no markdown fence, no commentary: {"roles": [{"
 EOF
 )
 
-exec claude -p "$PROMPT" --output-format json --allowedTools "WebSearch"
+exec "$CLAUDE_BIN" -p "$PROMPT" --output-format json --allowedTools "WebSearch"

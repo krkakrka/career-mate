@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
 import { getDb } from '../../db/client.js';
+import { ensureDaemonRunning } from '../../lib/daemon-control.js';
 import { DuplicateError, NotFoundError } from '../../db/errors.js';
 import { listInterviewNotes } from '../../db/repositories/interview-notes.js';
 import { listRecruiterContacts } from '../../db/repositories/recruiter-contacts.js';
@@ -16,7 +17,7 @@ import {
 import { markersByKind, roleFieldGroupStatus } from '../../derive/view-staleness.js';
 import { ROLE_STATUSES } from '../../domain/role-status.js';
 import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
-import { enqueueEnrichment, enqueueRecomputesAndRun } from '../enqueue-enrichment.js';
+import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
 import {
   parseDate,
@@ -110,12 +111,13 @@ export function registerRolesCommand(program: Command): void {
         console.log('No roles match.');
         return;
       }
+      let anyOutstanding = false;
       for (const role of rows) {
         // Same lazy-recompute treatment as `companies list`: roles are the
         // view looked at most, so leaving it out meant the primary daily
         // list never showed a marker and never healed itself.
         const groups = roleFieldGroupStatus(db, role);
-        enqueueRecomputesAndRun(db, 'role', role.id, groups);
+        anyOutstanding = queueRecomputes(db, 'role', role.id, groups) || anyOutstanding;
         const marker = groups.some((group) => group.marker === '(stale)') ? '  (stale)' : '';
 
         const companyLabel = role.company_id !== null ? `company#${role.company_id}` : 'company(pending)';
@@ -124,6 +126,8 @@ export function registerRolesCommand(program: Command): void {
           `#${role.id}  ${role.title ?? '(untitled)'}  ${companyLabel}  status=${role.status}  ${priorityLabel}  ${role.url}${marker}`,
         );
       }
+      // Once for the whole list, not once per row.
+      if (anyOutstanding) ensureDaemonRunning();
     });
 
   roles

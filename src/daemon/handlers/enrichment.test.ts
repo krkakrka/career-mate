@@ -139,11 +139,7 @@ describe('company-wlb job — no urlTemplate configured (the shipped default)', 
 });
 
 describe('derivation atomicity', () => {
-  // Tagged live: reaching the transaction at all requires the structural
-  // extraction to run, and there is no CM_CLAUDE_BIN override until Step
-  // 18. `refresh.test.ts` covers the same invariant offline via the
-  // phrase-match path.
-  it('live: does not record a structural derivation when an effect of it fails', async () => {
+  it('does not record a structural derivation when an effect of it fails', async () => {
     // The derivation row is the claim "this input has been fully
     // processed", and the next run skips the model on the strength of it.
     // If it could be written while an effect was still missing, a transient

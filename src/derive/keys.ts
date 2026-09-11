@@ -43,10 +43,10 @@ export function contextKey(contextJson: string): string {
  * either one changes how the answer would be reached and must invalidate
  * what the old procedure produced, whichever half actually decided.
  */
-export function combinedRecipeVersion(paths: string[]): string {
+export function combinedRecipeVersion(paths: string[], extra: string[] = []): string {
   // Contents only, never the paths themselves: embedding an absolute path
   // would make moving the checkout (or installing under a different prefix)
   // invalidate every derivation that used this recipe, and pay to recompute
   // values whose inputs and recipe are both byte-identical.
-  return sha256(paths.map((filePath) => recipeVersion(filePath)).join('\n'));
+  return sha256([...paths.map((filePath) => recipeVersion(filePath)), ...extra].join('\n'));
 }

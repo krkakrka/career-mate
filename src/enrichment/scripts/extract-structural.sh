@@ -13,6 +13,12 @@
 # markdown fence claude -p wraps JSON answers in.
 set -euo pipefail
 
+# The `claude` binary to run. Overridable so the test suite can substitute a
+# deterministic stand-in: without it every test that touches extraction is a
+# live, paid, network-dependent call, which is what kept real bugs hidden in
+# the noise of an intermittently failing suite.
+CLAUDE_BIN="${CM_CLAUDE_BIN:-claude}"
+
 KIND="${1:-}"
 FIELDS="${2:-}"
 
@@ -77,4 +83,4 @@ Extract:
 ${DESCRIPTIONS}
 Respond with ONLY a JSON object, no markdown fence, no commentary: {${SHAPE}}. Use null for any field you cannot confidently determine from the page content."
 
-exec claude -p "$PROMPT" --output-format json
+exec "$CLAUDE_BIN" -p "$PROMPT" --output-format json

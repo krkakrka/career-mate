@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const sourcesPath = fileURLToPath(new URL('./sources.json', import.meta.url));
+/**
+ * Exported so the research recipe hash can cover it: `instructions` from
+ * this file are prepended to the research prompt, so they are as much part
+ * of the recipe as the script is — without hashing it, editing an
+ * instruction would leave every existing research derivation looking fresh
+ * and the edited prompt would never run for anything already researched.
+ */
+export const sourcesPath = fileURLToPath(new URL('./sources.json', import.meta.url));
 
 export interface SourceRecipe {
   requiresLogin: boolean;

@@ -7,6 +7,12 @@
 # Usage: research-web.sh <role|company> <instructions>   (JSON context piped via stdin)
 set -euo pipefail
 
+# The `claude` binary to run. Overridable so the test suite can substitute a
+# deterministic stand-in: without it every test that touches extraction is a
+# live, paid, network-dependent call, which is what kept real bugs hidden in
+# the noise of an intermittently failing suite.
+CLAUDE_BIN="${CM_CLAUDE_BIN:-claude}"
+
 KIND="${1:-}"
 INSTRUCTIONS="${2:-}"
 CONTEXT=$(cat)
@@ -34,4 +40,4 @@ Use null for any field you cannot confidently determine from real sources you fo
 EOF
 )
 
-exec claude -p "$PROMPT" --output-format json --allowedTools "WebSearch"
+exec "$CLAUDE_BIN" -p "$PROMPT" --output-format json --allowedTools "WebSearch"

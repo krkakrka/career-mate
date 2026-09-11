@@ -12,7 +12,9 @@ let tempDir: string;
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-structural-script-'));
   // A `claude` that just echoes the prompt it was handed, so the test can
-  // assert what the model would actually have been asked.
+  // assert what the model would actually have been asked. Injected through
+  // CM_CLAUDE_BIN, the same override the suite-wide fake uses — a PATH stub
+  // would be silently bypassed by it.
   const stub = path.join(tempDir, 'claude');
   fs.writeFileSync(stub, '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%s" "$2"\n');
   fs.chmodSync(stub, 0o755);
@@ -26,7 +28,7 @@ function promptFor(...args: string[]): { prompt: string; status: number | null; 
   const result = spawnSync(script, args, {
     input: 'title: Staff Engineer\n\nStaff Engineer\nJoin us.',
     encoding: 'utf-8',
-    env: { ...process.env, PATH: `${tempDir}:${process.env.PATH ?? ''}` },
+    env: { ...process.env, CM_CLAUDE_BIN: path.join(tempDir, 'claude') },
   });
   return { prompt: result.stdout, status: result.status, stderr: result.stderr };
 }

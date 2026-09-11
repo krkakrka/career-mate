@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import type { EnrichmentJobPayload } from '../daemon/handlers/enrichment.js';
 import type { Company } from '../db/repositories/companies.js';
@@ -15,11 +14,9 @@ import {
 import type { EntityType } from '../domain/entity-type.js';
 import { buildCompanyResearchContext, buildRoleResearchContext } from '../enrichment/research-context.js';
 import { hashUrl } from '../pages/store.js';
-import { contextKey, recipeVersion, type DerivationKey } from './keys.js';
+import { contextKey, type DerivationKey } from './keys.js';
+import { researchRecipeVersion, structuralRecipeVersion } from './recipes.js';
 import { isStale, type StalenessReason } from './staleness.js';
-
-const structuralScript = fileURLToPath(new URL('../enrichment/scripts/extract-structural.sh', import.meta.url));
-const researchWebScript = fileURLToPath(new URL('../enrichment/scripts/research-web.sh', import.meta.url));
 
 export interface FieldGroupStatus {
   kind: DerivationKind;
@@ -46,10 +43,10 @@ function markerFor(reason: StalenessReason): FieldGroupStatus['marker'] {
  * There is no input to be inconsistent with, and a recompute would have
  * nothing to read.
  */
-function pageKey(db: Database.Database, url: string, scriptPath: string): DerivationKey | undefined {
+function pageKey(db: Database.Database, url: string): DerivationKey | undefined {
   const snapshot = getLatestSuccessfulSnapshot(db, hashUrl(url));
   if (!snapshot?.text_hash) return undefined;
-  return { sourceKey: snapshot.text_hash, recipeVersion: recipeVersion(scriptPath) };
+  return { sourceKey: snapshot.text_hash, recipeVersion: structuralRecipeVersion() };
 }
 
 function statusFor(
@@ -73,20 +70,20 @@ function statusFor(
  */
 export function companyFieldGroupStatus(db: Database.Database, company: Company): FieldGroupStatus[] {
   return [
-    statusFor(db, 'company', company.id, 'company_structural', pageKey(db, company.url, structuralScript)),
+    statusFor(db, 'company', company.id, 'company_structural', pageKey(db, company.url)),
     statusFor(db, 'company', company.id, 'company_research', {
       sourceKey: contextKey(buildCompanyResearchContext(company)),
-      recipeVersion: recipeVersion(researchWebScript),
+      recipeVersion: researchRecipeVersion(),
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);
 }
 
 export function roleFieldGroupStatus(db: Database.Database, role: Role): FieldGroupStatus[] {
   return [
-    statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url, structuralScript)),
+    statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url)),
     statusFor(db, 'role', role.id, 'role_research', {
       sourceKey: contextKey(buildRoleResearchContext(db, role)),
-      recipeVersion: recipeVersion(researchWebScript),
+      recipeVersion: researchRecipeVersion(),
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);
 }

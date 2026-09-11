@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
 import { getDb } from '../../db/client.js';
+import { ensureDaemonRunning } from '../../lib/daemon-control.js';
 import { DuplicateError, NotFoundError } from '../../db/errors.js';
 import {
   createCompany,
@@ -13,7 +14,7 @@ import {
 import { companyFieldGroupStatus, markersByKind } from '../../derive/view-staleness.js';
 import { recomputePriorityForCompanyRoles } from '../../scoring/priority.js';
 import { companyStructuralPayload } from '../../domain/enrichment-payload.js';
-import { enqueueEnrichment, enqueueRecomputesAndRun } from '../enqueue-enrichment.js';
+import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
 import { parseHttpUrl, parsePositiveInt, parseRating } from '../parsers.js';
 
@@ -83,14 +84,17 @@ export function registerCompaniesCommand(program: Command): void {
         console.log('No companies tracked yet. Add one with `cm companies add <url>`.');
         return;
       }
+      let anyOutstanding = false;
       for (const company of rows) {
         const groups = companyFieldGroupStatus(db, company);
-        enqueueRecomputesAndRun(db, 'company', company.id, groups);
+        anyOutstanding = queueRecomputes(db, 'company', company.id, groups) || anyOutstanding;
         const marker = groups.some((group) => group.marker === '(stale)') ? '  (stale)' : '';
         console.log(
           `#${company.id}  ${company.name ?? '(unnamed)'}  ${company.url}  pref=${company.preference_rating}${marker}`,
         );
       }
+      // Once for the whole list, not once per row.
+      if (anyOutstanding) ensureDaemonRunning();
     });
 
   companies

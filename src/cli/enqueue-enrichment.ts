@@ -33,7 +33,24 @@ export function enqueueRecomputesAndRun(
   entityId: number,
   groups: FieldGroupStatus[],
 ): void {
-  if (groups.length === 0) return;
+  if (queueRecomputes(db, entityType, entityId, groups)) ensureDaemonRunning();
+}
+
+/**
+ * The same queueing without the daemon kick, returning whether anything is
+ * outstanding — for list views, which must kick *once* rather than once per
+ * row. `ensureDaemonRunning` spawns detached and returns before the child
+ * has claimed the pid file, so calling it per row on a long list races a
+ * daemon per row into existence; they exit cleanly on losing the pid-file
+ * claim, but every one of them is a wasted node startup.
+ */
+export function queueRecomputes(
+  db: Database.Database,
+  entityType: EntityType,
+  entityId: number,
+  groups: FieldGroupStatus[],
+): boolean {
+  if (groups.length === 0) return false;
   enqueueRecomputes(db, entityType, entityId, groups);
-  ensureDaemonRunning();
+  return true;
 }
