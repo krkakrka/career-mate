@@ -28,6 +28,14 @@ export interface Settings {
    * extraction for every such role, forever.
    */
   recompute_min_interval_minutes: number;
+  /** A job left `running` this long has outlived the daemon that claimed it (kill -9, crash) and is requeued on the next start. */
+  stale_running_job_minutes: number;
+  /**
+   * How long the daemon stays up with nothing to do. The next `cm` command
+   * starts a fresh one, so nothing is lost by exiting. **0 disables idle
+   * exit** — the daemon then runs until stopped.
+   */
+  daemon_idle_exit_minutes: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -38,6 +46,8 @@ const DEFAULT_SETTINGS: Settings = {
   claude_max_budget_usd: 0.5,
   claude_timeout_seconds: 180,
   recompute_min_interval_minutes: 60,
+  stale_running_job_minutes: 30,
+  daemon_idle_exit_minutes: 30,
 };
 
 export function loadSettings(): Settings {
@@ -62,5 +72,7 @@ export function loadSettings(): Settings {
       settings.recompute_min_interval_minutes,
       DEFAULT_SETTINGS.recompute_min_interval_minutes,
     ),
+    stale_running_job_minutes: numberOr(settings.stale_running_job_minutes, DEFAULT_SETTINGS.stale_running_job_minutes),
+    daemon_idle_exit_minutes: numberOr(settings.daemon_idle_exit_minutes, DEFAULT_SETTINGS.daemon_idle_exit_minutes),
   };
 }

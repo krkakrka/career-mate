@@ -49,8 +49,10 @@ export function queueRecomputes(
   entityType: EntityType,
   entityId: number,
   groups: FieldGroupStatus[],
+  /** Hoisted out of list loops, like the scoring weights — otherwise it is a settings.json read per row. */
+  floorMs?: number,
 ): boolean {
   if (groups.length === 0) return false;
-  enqueueRecomputes(db, entityType, entityId, groups);
+  enqueueRecomputes(db, entityType, entityId, groups, floorMs);
   return true;
 }

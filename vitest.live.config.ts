@@ -13,6 +13,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
+    globalSetup: ['./test/helpers/global-setup.ts'],
     include: ['**/*.live.test.ts'],
     exclude: ['**/node_modules/**'],
     testTimeout: 900_000,

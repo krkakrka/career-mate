@@ -17,13 +17,15 @@ export interface WorkerPoolOptions {
 
 const DEFAULT_CONCURRENCY = 1;
 
-async function drainSlot(options: WorkerPoolOptions, topic: JobTopic): Promise<void> {
+async function drainSlot(options: WorkerPoolOptions, topic: JobTopic): Promise<number> {
   const handler = options.handlers[topic];
-  if (!handler) return;
+  if (!handler) return 0;
 
+  let processed = 0;
   for (;;) {
     const job = claimNextJob(options.db, topic);
-    if (!job) return;
+    if (!job) return processed;
+    processed += 1;
 
     // No start/fail logging here — claimNextJob/completeJob/failJob in
     // jobs.ts already record the full lifecycle (including entity
@@ -49,22 +51,38 @@ async function drainSlot(options: WorkerPoolOptions, topic: JobTopic): Promise<v
  * what `cm worker drain` calls directly, and what the poll loop calls once
  * per tick.
  */
-export async function drainOnce(options: WorkerPoolOptions): Promise<void> {
+export async function drainOnce(options: WorkerPoolOptions): Promise<number> {
   const topics = Object.keys(options.handlers) as JobTopic[];
-  await Promise.all(
+  const processed = await Promise.all(
     topics.flatMap((topic) => {
       const concurrency = options.concurrency[topic] ?? DEFAULT_CONCURRENCY;
       return Array.from({ length: concurrency }, () => drainSlot(options, topic));
     }),
   );
+  return processed.reduce((total, count) => total + count, 0);
 }
 
 export interface PollingHandle {
   stop: () => Promise<void>;
 }
 
+export interface PollingOptions {
+  /**
+   * Consulted after every tick. Returning a reason stops the loop and
+   * reports it — the daemon uses this for its own lifecycle policy (its
+   * data directory has been deleted, or it has been idle long enough to be
+   * worth exiting) without the pool needing to know about any of that.
+   */
+  shouldStop?: (workDone: number) => string | undefined;
+  onStopped?: (reason: string) => void;
+}
+
 /** Runs drainOnce on an interval until stop() is called; used by the daemon process. */
-export function startPolling(options: WorkerPoolOptions, pollIntervalMs = 1000): PollingHandle {
+export function startPolling(
+  options: WorkerPoolOptions,
+  pollIntervalMs = 1000,
+  lifecycle: PollingOptions = {},
+): PollingHandle {
   let stopped = false;
   let currentRun: Promise<void> = Promise.resolve();
   let timer: NodeJS.Timeout | undefined;
@@ -72,6 +90,13 @@ export function startPolling(options: WorkerPoolOptions, pollIntervalMs = 1000):
   const tick = (): void => {
     if (stopped) return;
     currentRun = drainOnce(options)
+      .then((workDone) => {
+        const reason = lifecycle.shouldStop?.(workDone);
+        if (reason !== undefined) {
+          stopped = true;
+          lifecycle.onStopped?.(reason);
+        }
+      })
       .catch((error: unknown) => {
         // A tick failing (e.g. claimNextJob hitting a transient SQLITE_BUSY)
         // must not kill the poll loop — log and keep going. Without this,

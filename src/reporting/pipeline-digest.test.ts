@@ -18,6 +18,8 @@ const SETTINGS: Settings = {
   claude_max_budget_usd: 0.5,
   claude_timeout_seconds: 180,
   recompute_min_interval_minutes: 60,
+  stale_running_job_minutes: 30,
+  daemon_idle_exit_minutes: 30,
 };
 
 let tempDir: string;

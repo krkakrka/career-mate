@@ -1,7 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import Database from 'better-sqlite3';
-import { getDataDir } from '../lib/paths.js';
+import { dbPath, getDataDir } from '../lib/paths.js';
 import { withBusyRetry } from './busy-retry.js';
 import { runMigrations } from './migrate.js';
 
@@ -40,7 +39,7 @@ export function getDb(): Database.Database {
 
   const dataDir = getDataDir();
   fs.mkdirSync(dataDir, { recursive: true });
-  dbInstance = openDb(path.join(dataDir, 'career-mate.db'));
+  dbInstance = openDb(dbPath());
   return dbInstance;
 }
 

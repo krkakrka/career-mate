@@ -215,6 +215,76 @@ export function listJobs(db: Database.Database, filters: JobFilters = {}): JobRe
     .all(...(filters.status ? [filters.status, limit] : [limit])) as JobRecord[];
 }
 
+/**
+ * Returns jobs stuck in `running` to the queue.
+ *
+ * A `running` row means "a daemon claimed this and is working on it" — but
+ * nothing un-claims it if that daemon dies (kill -9, a crash, a machine
+ * restart), so the job is stranded forever while `enqueueJobOnce` keeps
+ * deduping new requests against it.
+ *
+ * Requeueing **increments `attempts`** and gives up at `maxAttempts`. That
+ * matters more here than for an ordinary failure: a job that kills the
+ * daemon rather than throwing inside its handler (an OOM on a huge page, a
+ * native crash, anything reaching the `uncaughtException` path) would
+ * otherwise be requeued verbatim, kill the next daemon too, and loop
+ * forever — with the idle-exit-plus-autostart behaviour cheerfully
+ * spawning a fresh victim on every `cm` command. `failJob`'s cap cannot
+ * break that cycle because it is never reached.
+ *
+ * The age threshold is what keeps this safe alongside `cm worker drain`,
+ * which processes jobs without claiming the daemon pid file: a job younger
+ * than the threshold may legitimately be in flight somewhere else. Nothing
+ * legitimate runs for 30 minutes — the `claude` timeout is 180 s.
+ */
+export function requeueStaleRunningJobs(
+  db: Database.Database,
+  olderThanMinutes: number,
+  maxAttempts = DEFAULT_MAX_ATTEMPTS,
+): number {
+  const cutoff = new Date(Date.now() - Math.max(0, olderThanMinutes) * 60 * 1000).toISOString();
+  const stale = db
+    .prepare("SELECT id, attempts FROM jobs WHERE status = 'running' AND updated_at <= ?")
+    .all(cutoff) as { id: number; attempts: number }[];
+
+  let requeued = 0;
+  for (const job of stale) {
+    const attempts = job.attempts + 1;
+    const exhausted = attempts >= maxAttempts;
+
+    const changed = db
+      .prepare(
+        `UPDATE jobs SET status = ?, attempts = ?, error = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = 'running'`,
+      )
+      .run(
+        exhausted ? 'failed' : 'pending',
+        attempts,
+        'Left running by a daemon that stopped without completing it',
+        job.id,
+      ).changes;
+    if (changed === 0) continue; // someone else got to it first
+
+    if (!exhausted) requeued += 1;
+    tryRecordOperationalLog(db, {
+      severity: 'warn',
+      outcome: exhausted ? 'failed' : 'retried',
+      component: 'daemon',
+      action: 'requeue-stale-job',
+      jobId: job.id,
+      context: {
+        reason: 'left running by a daemon that is no longer alive',
+        attempts,
+        olderThanMinutes,
+        gaveUp: exhausted,
+      },
+    });
+  }
+
+  return requeued;
+}
+
 export function retryFailedJob(db: Database.Database, id: number): JobRecord {
   const job = getJobById(db, id);
   if (!job) throw new NotFoundError(`Job #${id} not found`);

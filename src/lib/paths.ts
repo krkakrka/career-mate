@@ -17,3 +17,8 @@ export function getPackageRoot(): string {
 export function getDataDir(): string {
   return process.env.CM_DATA_DIR ?? path.join(packageRoot, '.data');
 }
+
+/** The SQLite file inside the data dir. Single definition, so the daemon's "has my data dir been deleted?" check cannot drift from what getDb() actually opens. */
+export function dbPath(): string {
+  return path.join(getDataDir(), 'career-mate.db');
+}

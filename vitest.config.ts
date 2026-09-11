@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig({
   test: {
     environment: 'node',
+    globalSetup: ['./test/helpers/global-setup.ts'],
     include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/*.live.test.ts'],
     testTimeout: 20_000,

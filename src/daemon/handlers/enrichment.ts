@@ -8,7 +8,7 @@ import {
   updateStructuralFields as updateCompanyStructuralFields,
 } from '../../db/repositories/companies.js';
 import { recordEvent } from '../../db/repositories/events.js';
-import { enqueueJob, type JobRecord } from '../../db/repositories/jobs.js';
+import { enqueueJob, enqueueJobOnce, type JobRecord } from '../../db/repositories/jobs.js';
 import {
   attachCompanyIfUnresolved,
   getRoleById,
@@ -132,8 +132,13 @@ async function handleCompanyStructural(
   // saying "Re-enrichment queued" while deriving nothing is worse than the
   // small extra cost. (Correction recorded in PLAN.md's model section.)
   if (!force && skipIfFresh(db, 'company', companyId, 'company_structural', key)) {
-    enqueueJob(db, { topic: 'enrichment', payload: companyResearchPayload(companyId) });
-    enqueueJob(db, { topic: 'enrichment', payload: companyWlbPayload(companyId) });
+    // enqueueJobOnce, not enqueueJob: every `cm companies list` that finds
+    // this group stale queues a structural job whose only action is this,
+    // and handleCompanyWlb opens a real browser *before* it can compute its
+    // own key — so duplicates here mean repeated browser launches that
+    // discover they had nothing to do.
+    enqueueJobOnce(db, { topic: 'enrichment', payload: companyResearchPayload(companyId) });
+    enqueueJobOnce(db, { topic: 'enrichment', payload: companyWlbPayload(companyId) });
     return;
   }
 
@@ -209,7 +214,8 @@ async function handleRoleStructural(
 
   // See handleCompanyStructural on why `force` bypasses the freshness skip.
   if (!force && skipIfFresh(db, 'role', roleId, 'role_structural', key)) {
-    enqueueJob(db, { topic: 'enrichment', payload: roleResearchPayload(roleId) });
+    // See handleCompanyStructural on why this is debounced.
+    enqueueJobOnce(db, { topic: 'enrichment', payload: roleResearchPayload(roleId) });
     return;
   }
 

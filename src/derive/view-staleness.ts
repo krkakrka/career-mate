@@ -145,11 +145,10 @@ function isOutsideRecomputeFloor(
   entityType: EntityType,
   entityId: number,
   kind: DerivationKind,
+  floorMs: number,
 ): boolean {
   const derivation = getDerivation(db, entityType, entityId, kind);
   if (!derivation) return true; // never computed — nothing to rate-limit
-
-  const floorMs = loadSettings().recompute_min_interval_minutes * 60 * 1000;
   if (floorMs <= 0) return true;
 
   const computedAt = Date.parse(derivation.computed_at);
@@ -170,16 +169,23 @@ export function enqueueRecomputes(
   entityType: EntityType,
   entityId: number,
   groups: FieldGroupStatus[],
+  /** Passed in by list views so a settings.json read does not happen once per row. */
+  floorMs = loadSettings().recompute_min_interval_minutes * 60 * 1000,
 ): number {
   let enqueued = 0;
   for (const group of groups) {
     const payload = recomputePayload(group.kind, entityId);
     if (!payload) continue;
     if (!isReadyToCompute(db, entityType, entityId, group.kind)) continue;
-    if (!isOutsideRecomputeFloor(db, entityType, entityId, group.kind)) continue;
+    if (!isOutsideRecomputeFloor(db, entityType, entityId, group.kind, floorMs)) continue;
     if (enqueueJobOnce(db, { topic: 'enrichment', payload })) enqueued += 1;
   }
   return enqueued;
+}
+
+/** The recompute floor in milliseconds, read once so a list view can pass it per row. */
+export function recomputeFloorMs(): number {
+  return loadSettings().recompute_min_interval_minutes * 60 * 1000;
 }
 
 /** Convenience for the print path: `kind -> marker`, so a detail view can suffix the right lines. */

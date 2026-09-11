@@ -11,7 +11,7 @@ import {
   setPreferenceRating,
   type Company,
 } from '../../db/repositories/companies.js';
-import { companyFieldGroupStatus, markersByKind } from '../../derive/view-staleness.js';
+import { companyFieldGroupStatus, markersByKind, recomputeFloorMs } from '../../derive/view-staleness.js';
 import { companyStructuralPayload } from '../../domain/enrichment-payload.js';
 import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
@@ -83,10 +83,12 @@ export function registerCompaniesCommand(program: Command): void {
         console.log('No companies tracked yet. Add one with `cm companies add <url>`.');
         return;
       }
+      // Read once for the whole list, like the scoring weights above.
+      const floorMs = recomputeFloorMs();
       let anyOutstanding = false;
       for (const company of rows) {
         const groups = companyFieldGroupStatus(db, company);
-        anyOutstanding = queueRecomputes(db, 'company', company.id, groups) || anyOutstanding;
+        anyOutstanding = queueRecomputes(db, 'company', company.id, groups, floorMs) || anyOutstanding;
         const marker = groups.some((group) => group.marker === '(stale)') ? '  (stale)' : '';
         console.log(
           `#${company.id}  ${company.name ?? '(unnamed)'}  ${company.url}  pref=${company.preference_rating}${marker}`,
