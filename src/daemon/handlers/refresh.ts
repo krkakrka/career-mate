@@ -69,7 +69,9 @@ export async function handleRoleClosureCheck(
       return;
     }
 
-    const verdict = await decideClosure(readSnapshotText(snapshot));
+    const verdict = await decideClosure(readSnapshotText(snapshot), {
+      track: { db, tracking: { entityType: 'role', entityId: roleId, kind: 'role_closure', jobId } },
+    });
     closed = verdict.status === 'closed';
     reason = verdict.reason;
 

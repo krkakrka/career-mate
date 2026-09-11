@@ -3,6 +3,7 @@ import { tryRecordOperationalLog } from '../db/repositories/operational-logs.js'
 import { claimPidFile, removePidFile } from '../lib/daemon-pid.js';
 import { buildHandlerRegistry, DEFAULT_TOPIC_CONCURRENCY } from './handlers/index.js';
 import { startPolling } from './worker-pool.js';
+import { killRunningExtractions } from '../enrichment/claude-extract.js';
 
 const POLL_INTERVAL_MS = 500;
 
@@ -32,6 +33,10 @@ function shutdown(): void {
       () => false, // best-effort — we're exiting either way, but this still decides what gets logged below.
     )
     .then((stoppedCleanly) => {
+      // Before the pid file goes: an in-flight `claude` runs in its own
+      // process group, so nothing else would ever kill it. Left behind it
+      // keeps spending up to --max-budget-usd with no timeout watching it.
+      killRunningExtractions();
       removePidFile();
       tryRecordOperationalLog(db, {
         severity: stoppedCleanly ? 'info' : 'warn',

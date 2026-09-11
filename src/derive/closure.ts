@@ -1,5 +1,7 @@
 import { fileURLToPath } from 'node:url';
+import type Database from 'better-sqlite3';
 import { runExtraction, type ExtractionUsage } from '../enrichment/claude-extract.js';
+import { runTrackedExtraction, type ExtractionTracking } from '../enrichment/tracked-extraction.js';
 import phraseList from './closure-phrases.json' with { type: 'json' };
 
 /** Exported so the refresh handler can hash it for the derivation's recipe_version. */
@@ -61,6 +63,12 @@ export function detectClosurePhrase(text: string): string | undefined {
 export interface DecideClosureOptions {
   /** Overridable so a test can point at a script that fails loudly, proving the model was never reached. */
   scriptPath?: string;
+  /**
+   * When given, the model call is recorded in the spend ledger — including
+   * if it fails, and before any caller transaction that might roll back.
+   * Optional so unit tests can decide a verdict without a database.
+   */
+  track?: { db: Database.Database; tracking: ExtractionTracking };
 }
 
 /**
@@ -77,7 +85,10 @@ export async function decideClosure(text: string, options: DecideClosureOptions 
     return { status: 'closed', reason: `page text contains "${phrase}"`, source: 'phrase' };
   }
 
-  const { data, usage } = await runExtraction(options.scriptPath ?? closureScriptPath, [], text);
+  const scriptPath = options.scriptPath ?? closureScriptPath;
+  const { data, usage } = options.track
+    ? await runTrackedExtraction(options.track.db, options.track.tracking, scriptPath, [], text)
+    : await runExtraction(scriptPath, [], text);
   const extraction = data as ClosureExtraction;
 
   return {

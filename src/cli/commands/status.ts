@@ -37,5 +37,11 @@ export function registerStatusCommand(program: Command): void {
 
       console.log(`\nReapply cooldown still active: ${digest.reapplyUpcoming.length}`);
       for (const role of digest.reapplyUpcoming) printRoleLine(role, `reapply_after ${role.reapplyAfter}`);
+
+      const { last7Days, last30Days } = digest.modelSpend;
+      console.log(
+        `\nModel spend: $${last7Days.totalUsd.toFixed(2)} over ${last7Days.calls} call(s) in 7d  ·  ` +
+          `$${last30Days.totalUsd.toFixed(2)} over ${last30Days.calls} call(s) in 30d`,
+      );
     });
 }

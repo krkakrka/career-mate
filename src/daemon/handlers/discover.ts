@@ -10,7 +10,7 @@ import { createRole } from '../../db/repositories/roles.js';
 import { contextKey, recipeVersion } from '../../derive/keys.js';
 import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
 import { recordDerivation } from '../../derive/record.js';
-import { runExtraction } from '../../enrichment/claude-extract.js';
+import { runTrackedExtraction } from '../../enrichment/tracked-extraction.js';
 import { matchesPreferences } from '../../domain/preference-match.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
 import type { NotificationJobPayload } from './notification.js';
@@ -47,7 +47,13 @@ async function handleCompanyDiscover(db: Database.Database, companyId: number, j
     preferences,
   });
 
-  const { data, usage } = await runExtraction(discoverScript, [], context);
+  const { data, usage } = await runTrackedExtraction(
+    db,
+    { entityType: 'company', entityId: companyId, kind: 'company_discover', jobId },
+    discoverScript,
+    [],
+    context,
+  );
   const extraction = data as DiscoverExtraction;
 
   // Recorded for spend reporting only — discover is never skipped as

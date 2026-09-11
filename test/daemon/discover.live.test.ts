@@ -7,6 +7,7 @@ import { createCompany } from '../../src/db/repositories/companies.js';
 import { listRoles, type Role } from '../../src/db/repositories/roles.js';
 import { killDaemon } from '../helpers/kill-daemon.js';
 import { runCli } from '../helpers/run-cli.js';
+import { normalizeUrl } from '../../src/lib/normalize-url.js';
 
 // discover has no fixture-server control point at all (unlike structural
 // fetch/refresh, which fetch a page first) — its only I/O is an open
@@ -76,13 +77,24 @@ describe('cm discover (live claude -p web search)', () => {
       const secondRun = runCli(['discover'], { dataDir, allowDaemonAutostart: true });
       expect(secondRun.exitCode).toBe(0);
 
-      // Give the second discover pass time to run, then confirm no
-      // duplicates were created for postings already tracked from the
-      // first run (a fixed wait, not a poll-for-change, since "nothing new
-      // happened" has no positive signal to poll for).
+      // Give the second discover pass time to run, then confirm it created
+      // no duplicate of anything already tracked (a fixed wait, not a
+      // poll-for-change, since "nothing new happened" has no positive
+      // signal to poll for).
       await new Promise((resolve) => setTimeout(resolve, 60_000));
       const rolesAfterSecond = readRoles(dbPath, company.id);
-      expect(rolesAfterSecond.length).toBe(roles.length);
+
+      // Asserting the *count* is unchanged would be asserting that a live
+      // web search returns the same URLs twice — the model's determinism,
+      // not our dedupe, and it genuinely does not hold: a second search
+      // legitimately surfaces postings the first one missed. What the
+      // duplicate check actually guarantees is that no URL is tracked
+      // twice, which is what this checks. The count-based version of the
+      // logic is covered deterministically in
+      // src/daemon/handlers/discover.test.ts.
+      const normalized = rolesAfterSecond.map((role) => normalizeUrl(role.url));
+      expect(new Set(normalized).size).toBe(normalized.length);
+      expect(rolesAfterSecond.length).toBeGreaterThanOrEqual(roles.length);
     },
     TEST_TIMEOUT_MS,
   );

@@ -3,6 +3,7 @@ import type { Settings } from '../config/settings.js';
 import { listRecruiterContacts, type RecruiterContact } from '../db/repositories/recruiter-contacts.js';
 import type { Role } from '../db/repositories/roles.js';
 import { ACTIVE_ROLE_STATUSES, ROLE_STATUSES, type RoleStatus } from '../domain/role-status.js';
+import { spendSince, type ModelSpend } from '../db/repositories/model-calls.js';
 
 export interface StaleRole {
   id: number;
@@ -29,6 +30,12 @@ export interface PipelineDigest {
   reapplyReady: ReapplyRole[];
   /** reapply_after is set but still in the future. */
   reapplyUpcoming: ReapplyRole[];
+  /** What the model has actually cost, from the append-only call ledger. */
+  modelSpend: { last7Days: ModelSpend; last30Days: ModelSpend };
+}
+
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function toStaleRole(row: Pick<Role, 'id' | 'title' | 'url' | 'status' | 'status_changed_at'>): StaleRole {
@@ -95,5 +102,9 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
     overdueRecruiterContacts,
     reapplyReady,
     reapplyUpcoming,
+    modelSpend: {
+      last7Days: spendSince(db, isoDaysAgo(7)),
+      last30Days: spendSince(db, isoDaysAgo(30)),
+    },
   };
 }

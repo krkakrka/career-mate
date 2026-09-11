@@ -25,7 +25,7 @@ import {
   prefillRoleStructural,
   ROLE_STRUCTURAL_FIELDS,
 } from '../../derive/structural.js';
-import { runExtraction } from '../../enrichment/claude-extract.js';
+import { runTrackedExtraction } from '../../enrichment/tracked-extraction.js';
 import { buildCompanyResearchContext, buildRoleResearchContext } from '../../enrichment/research-context.js';
 import { getSourceRecipe } from '../../enrichment/sources.js';
 import {
@@ -146,7 +146,15 @@ async function handleCompanyStructural(
   // `description`), and kept deliberately: it is what makes adding one
   // later skip the call rather than silently re-ask for every field, since
   // an empty field list makes the script fall back to all of them.
-  const result = wanted.length ? await runExtraction(structuralScript, ['company', wanted.join(',')], text) : undefined;
+  const result = wanted.length
+    ? await runTrackedExtraction(
+        db,
+        { entityType: 'company', entityId: companyId, kind: 'company_structural', jobId },
+        structuralScript,
+        ['company', wanted.join(',')],
+        text,
+      )
+    : undefined;
   const extraction = (result?.data ?? {}) as CompanyStructuralExtraction;
 
   const name = prefill.name ?? extraction.name ?? null;
@@ -211,7 +219,15 @@ async function handleRoleStructural(
   const prefill = prefillRoleStructural(readSnapshotHtml(snapshot));
   const wanted = missingFields(ROLE_STRUCTURAL_FIELDS, prefill);
   // See the note in handleCompanyStructural on the empty-`wanted` branch.
-  const result = wanted.length ? await runExtraction(structuralScript, ['role', wanted.join(',')], text) : undefined;
+  const result = wanted.length
+    ? await runTrackedExtraction(
+        db,
+        { entityType: 'role', entityId: roleId, kind: 'role_structural', jobId },
+        structuralScript,
+        ['role', wanted.join(',')],
+        text,
+      )
+    : undefined;
   const extraction = (result?.data ?? {}) as RoleStructuralExtraction;
 
   const title = prefill.title ?? extraction.title ?? null;
@@ -335,7 +351,13 @@ async function handleRoleResearch(db: Database.Database, roleId: number, jobId: 
   const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion() };
   if (skipIfFresh(db, 'role', roleId, 'role_research', key)) return;
 
-  const { data, usage } = await runExtraction(researchWebScript, ['role', recipe.instructions], context);
+  const { data, usage } = await runTrackedExtraction(
+    db,
+    { entityType: 'role', entityId: roleId, kind: 'role_research', jobId },
+    researchWebScript,
+    ['role', recipe.instructions],
+    context,
+  );
   const extraction = data as RoleResearchExtraction;
 
   const salaryMin = typeof extraction.salaryMin === 'number' ? extraction.salaryMin : null;
@@ -373,7 +395,13 @@ async function handleCompanyResearch(db: Database.Database, companyId: number, j
   const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion() };
   if (skipIfFresh(db, 'company', companyId, 'company_research', key)) return;
 
-  const { data, usage } = await runExtraction(researchWebScript, ['company', recipe.instructions], context);
+  const { data, usage } = await runTrackedExtraction(
+    db,
+    { entityType: 'company', entityId: companyId, kind: 'company_research', jobId },
+    researchWebScript,
+    ['company', recipe.instructions],
+    context,
+  );
   const extraction = data as CompanyResearchExtraction;
 
   const aiProofScore = typeof extraction.aiProofScore === 'number' ? extraction.aiProofScore : null;
@@ -446,7 +474,13 @@ async function handleCompanyWlb(db: Database.Database, companyId: number, jobId:
   const key = { sourceKey: sha256(html), recipeVersion: recipeVersion(extractWlbScript) };
   if (skipIfFresh(db, 'company', companyId, 'company_wlb', key)) return;
 
-  const { data, usage } = await runExtraction(extractWlbScript, [], html);
+  const { data, usage } = await runTrackedExtraction(
+    db,
+    { entityType: 'company', entityId: companyId, kind: 'company_wlb', jobId },
+    extractWlbScript,
+    [],
+    html,
+  );
   const extraction = data as WlbExtraction;
 
   const wlbScore = typeof extraction.wlbScore === 'number' ? extraction.wlbScore : null;

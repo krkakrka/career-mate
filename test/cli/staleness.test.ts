@@ -97,6 +97,14 @@ describe('cm show — lazy recompute', () => {
   });
 });
 
+describe('cm status — model spend', () => {
+  it('reports zero spend before anything has run', () => {
+    const status = runCli(['status'], { dataDir });
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout).toMatch(/Model spend: \$0\.00 over 0 call\(s\) in 7d/);
+  });
+});
+
 describe('rerun-enrichment', () => {
   it('still works but points at the command that replaces it', () => {
     runCli(['companies', 'add', 'https://example.com'], { dataDir });

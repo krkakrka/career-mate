@@ -33,6 +33,8 @@ describe('loadSettings', () => {
       reapply_cooldown_months: 1,
       page_refresh_days: { role: 3, company: 30 },
       claude_max_budget_usd: 0.5,
+      claude_timeout_seconds: 180,
+      recompute_min_interval_minutes: 60,
     });
   });
 

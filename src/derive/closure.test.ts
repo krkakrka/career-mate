@@ -40,6 +40,16 @@ describe('detectClosurePhrase', () => {
     );
   });
 
+  it.each([
+    ['a search widget empty state', 'Senior Engineer\nApply now.\nJob not found — try another search.'],
+    ['a sibling posting being closed', 'Applications are closed for our internship program, but this role is open.'],
+  ])('does not close a live posting on %s', (_case, text) => {
+    // A false *closed* verdict silently removes a live role from the
+    // pipeline; a phrase that misses just costs one model call. The list
+    // must only hold phrases that cannot appear on a live page.
+    expect(detectClosurePhrase(text)).toBeUndefined();
+  });
+
   it('is undefined for a page that is still open', () => {
     expect(detectClosurePhrase('Senior Engineer\nApply now — we review every application.')).toBeUndefined();
   });

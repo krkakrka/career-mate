@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { EnrichmentJobPayload } from '../daemon/handlers/enrichment.js';
+import { loadSettings } from '../config/settings.js';
 import type { Company } from '../db/repositories/companies.js';
 import { getDerivation, type DerivationKind } from '../db/repositories/derivations.js';
 import { enqueueJobOnce } from '../db/repositories/jobs.js';
@@ -129,6 +130,33 @@ function isReadyToCompute(
 }
 
 /**
+ * Whether enough time has passed since this group was last computed to pay
+ * for computing it again.
+ *
+ * Staleness is honest — the page text really did change — but plenty of job
+ * pages change text on every fetch ("Posted 3 days ago", an applicant
+ * counter, a rotating token rendered as text), and the closure check
+ * re-snapshots on every run. Without a floor, each `cm roles list` would
+ * queue a fresh paid extraction for every such role, indefinitely, and the
+ * only visible sign would be the spend line.
+ */
+function isOutsideRecomputeFloor(
+  db: Database.Database,
+  entityType: EntityType,
+  entityId: number,
+  kind: DerivationKind,
+): boolean {
+  const derivation = getDerivation(db, entityType, entityId, kind);
+  if (!derivation) return true; // never computed — nothing to rate-limit
+
+  const floorMs = loadSettings().recompute_min_interval_minutes * 60 * 1000;
+  if (floorMs <= 0) return true;
+
+  const computedAt = Date.parse(derivation.computed_at);
+  return Number.isNaN(computedAt) || Date.now() - computedAt >= floorMs;
+}
+
+/**
  * Queues a recompute for each out-of-date group, debounced: reading the
  * same entity ten times must leave one job per group, not ten. Returns how
  * many were newly enqueued.
@@ -148,6 +176,7 @@ export function enqueueRecomputes(
     const payload = recomputePayload(group.kind, entityId);
     if (!payload) continue;
     if (!isReadyToCompute(db, entityType, entityId, group.kind)) continue;
+    if (!isOutsideRecomputeFloor(db, entityType, entityId, group.kind)) continue;
     if (enqueueJobOnce(db, { topic: 'enrichment', payload })) enqueued += 1;
   }
   return enqueued;

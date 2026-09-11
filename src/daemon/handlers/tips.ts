@@ -15,7 +15,7 @@ import {
 } from '../../db/repositories/tips.js';
 import { contextKey, recipeVersion } from '../../derive/keys.js';
 import { recordDerivation } from '../../derive/record.js';
-import { runExtraction } from '../../enrichment/claude-extract.js';
+import { runTrackedExtraction } from '../../enrichment/tracked-extraction.js';
 
 const tipsScript = fileURLToPath(new URL('../../enrichment/scripts/research-tips.sh', import.meta.url));
 
@@ -62,7 +62,13 @@ function normalizeSources(value: unknown): TipsSource[] {
  */
 async function researchCompanyTips(db: Database.Database, company: Company, jobId: number): Promise<TipsRecord> {
   const context = JSON.stringify({ name: company.name, url: company.url, description: company.description });
-  const { data, usage } = await runExtraction(tipsScript, ['company'], context);
+  const { data, usage } = await runTrackedExtraction(
+    db,
+    { entityType: 'company', entityId: company.id, kind: 'tips_company', jobId },
+    tipsScript,
+    ['company'],
+    context,
+  );
   const extraction = data as TipsExtraction;
   recordDerivation(db, {
     entityType: 'company',
@@ -105,7 +111,13 @@ async function researchRoleTips(
     roleDescription: role.description,
     roleUrl: role.url,
   });
-  const { data, usage } = await runExtraction(tipsScript, ['role'], context);
+  const { data, usage } = await runTrackedExtraction(
+    db,
+    { entityType: 'role', entityId: role.id, kind: 'tips_role', jobId },
+    tipsScript,
+    ['role'],
+    context,
+  );
   const extraction = data as TipsExtraction;
   recordDerivation(db, {
     entityType: 'role',

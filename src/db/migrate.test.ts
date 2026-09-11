@@ -142,6 +142,7 @@ describe('0002_nullable_role_company migration', () => {
       '0003_operational_logs.sql',
       '0004_page_snapshots.sql',
       '0005_derivations.sql',
+      '0006_model_calls.sql',
     ]);
     db.close();
   });

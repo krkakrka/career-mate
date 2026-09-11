@@ -12,6 +12,22 @@ set -euo pipefail
 # the noise of an intermittently failing suite.
 CLAUDE_BIN="${CM_CLAUDE_BIN:-claude}"
 
+# Cheapest adequate model, and nothing it does not need.
+#
+# Fetched page content is untrusted input: a job posting can contain text
+# shaped like an instruction. These flags are what stop such an instruction
+# reaching anything worth reaching — `--tools ""` leaves the model no tools
+# at all (research scripts grant WebSearch and nothing else),
+# `--setting-sources ""` ignores user/project/local settings so no hook or
+# custom agent is picked up, and `--strict-mcp-config` skips every MCP
+# server. `--max-budget-usd` caps what a single call can spend.
+#
+# (The plan also called for `--max-turns`; no such flag exists in the
+# `claude` CLI as of 2.1.268, so it is deliberately absent rather than
+# guessed at.)
+MODEL="haiku"
+BUDGET="${CM_MAX_BUDGET_USD:-0.50}"
+
 PROMPT=$(cat <<'EOF'
 You are extracting a work-life-balance assessment from a company review page's content (e.g. Glassdoor), piped to you via stdin. Base your answer only on the provided content — do not browse or search for anything else.
 
@@ -23,4 +39,5 @@ Respond with ONLY a JSON object, no markdown fence, no commentary: {"wlbScore": 
 EOF
 )
 
-exec "$CLAUDE_BIN" -p "$PROMPT" --output-format json
+exec "$CLAUDE_BIN" -p "$PROMPT" --output-format json \
+  --model "$MODEL" --tools "" --setting-sources "" --strict-mcp-config --max-budget-usd "$BUDGET"

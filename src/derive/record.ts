@@ -43,7 +43,15 @@ export interface RecordDerivationParams {
   jobId?: number | null;
 }
 
-/** Records what a freshly computed value was computed from, so the next run can skip it. */
+/**
+ * Records what a freshly computed value was computed from, so the next run
+ * can skip it.
+ *
+ * Deliberately does NOT record spend: that is `runTrackedExtraction`'s job,
+ * because it must happen for failed calls too (which never reach here) and
+ * outside the caller's transaction (a rollback must not erase money already
+ * spent).
+ */
 export function recordDerivation(db: Database.Database, params: RecordDerivationParams): void {
   upsertDerivation(db, {
     entityType: params.entityType,
