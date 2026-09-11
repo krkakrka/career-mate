@@ -17,7 +17,6 @@ export interface Role {
   salary_max: number | null;
   equity: string | null;
   remote_eu: 'yes' | 'no' | 'unknown' | null;
-  priority_score: number | null;
   closed_at: string | null;
   last_checked_at: string | null;
   last_enriched_at: string | null;
@@ -51,12 +50,6 @@ export function getRoleById(db: Database.Database, id: number): Role | undefined
   return db.prepare('SELECT * FROM roles WHERE id = ?').get(id) as Role | undefined;
 }
 
-/** Every role id at a company, regardless of status — used by priority-score recompute cascades, not general listing (which defaults to active statuses only). */
-export function listRoleIdsForCompany(db: Database.Database, companyId: number): number[] {
-  return (db.prepare('SELECT id FROM roles WHERE company_id = ?').all(companyId) as { id: number }[]).map(
-    (row) => row.id,
-  );
-}
 
 /** Active-status roles not yet known closed — what `cm refresh` checks. Terminal-status roles (success/denied/skip) don't need closure checking. */
 export function listRoleIdsNeedingClosureCheck(db: Database.Database): number[] {
@@ -219,12 +212,13 @@ export function listRoles(db: Database.Database, options: ListRolesOptions = {})
     params.push(options.companyId);
   }
 
-  const orderBy =
-    options.sort === 'priority'
-      ? 'priority_score DESC'
-      : options.sort === 'company'
-        ? 'company_id ASC'
-        : 'updated_at DESC';
+  // Priority is deliberately absent here: it is computed on read from the
+  // role, its company, the scoring weights and the preference profile, so
+  // there is no column to sort by. `cm roles list --sort priority` sorts the
+  // returned rows in memory instead (src/cli/commands/roles.ts) — cheap for
+  // a personal pipeline, and it means a `set-preference` shows up on the
+  // very next list with no recompute job in between.
+  const orderBy = options.sort === 'company' ? 'company_id ASC' : 'updated_at DESC';
 
   return db
     .prepare(`SELECT * FROM roles WHERE ${clauses.join(' AND ')} ORDER BY ${orderBy}`)

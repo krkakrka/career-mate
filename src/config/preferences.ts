@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { booleanOr, nullableNumberOr, nullableStringOr, stringArrayOr } from '../lib/config-coerce.js';
 import { loadJsonConfig } from '../lib/json-config.js';
 import { getDataDir } from '../lib/paths.js';
 
@@ -28,7 +29,20 @@ function preferencesConfigPath(): string {
   return path.join(getDataDir(), 'config', 'preferences.json');
 }
 
-/** Reads .data/config/preferences.json, seeding it with defaults on first access if missing. */
+/**
+ * Reads .data/config/preferences.json, seeding it with defaults on first
+ * access if missing.
+ *
+ * Every field is coerced, because this is now read on the CLI's display
+ * path: a hand-edited `{"titleKeywords": null}` would otherwise reach
+ * `preferenceMatchTerm` and kill `cm roles list`/`show`/`add` outright.
+ */
 export function loadPreferences(): Preferences {
-  return loadJsonConfig(preferencesConfigPath(), DEFAULT_PREFERENCES);
+  const preferences = loadJsonConfig(preferencesConfigPath(), DEFAULT_PREFERENCES);
+  return {
+    titleKeywords: stringArrayOr(preferences.titleKeywords, DEFAULT_PREFERENCES.titleKeywords),
+    seniority: nullableStringOr(preferences.seniority, DEFAULT_PREFERENCES.seniority),
+    remoteEuRequired: booleanOr(preferences.remoteEuRequired, DEFAULT_PREFERENCES.remoteEuRequired),
+    minSalary: nullableNumberOr(preferences.minSalary, DEFAULT_PREFERENCES.minSalary),
+  };
 }

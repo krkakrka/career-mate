@@ -104,6 +104,19 @@ describe('link preservation', () => {
     expect(deriveText('<a href="https://example.com">https://example.com</a>')).toBe('https://example.com');
   });
 
+  it('does not attribute a URL from inside a script to a real anchor', () => {
+    // Inline JS routinely carries HTML templates — a __NEXT_DATA__ blob on
+    // an ATS page is exactly this shape. An unterminated `<a href=...>` in
+    // there used to pair with the next real </a> in the body, so the model
+    // was told the employer's homepage was a CDN/tracking domain, and
+    // resolveRoleCompany would attach that as the company.
+    const html =
+      `<html><body><script>var tpl = "<a href='https://cdn.example.com/track'>";</script>` +
+      `<p>Posted by <a href="https://acme.example.com">Acme Corp</a></p></body></html>`;
+
+    expect(deriveText(html)).toBe('Posted by Acme Corp (https://acme.example.com)');
+  });
+
   it('ignores relative and non-http link targets, which tell an extractor nothing', () => {
     expect(deriveText('<a href="/apply">Apply</a> <a href="javascript:void(0)">Menu</a>')).toBe('Apply Menu');
   });

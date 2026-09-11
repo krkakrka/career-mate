@@ -36,7 +36,6 @@ import {
 } from '../../domain/enrichment-payload.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
 import { readSnapshotHtml, readSnapshotText, snapshotPage } from '../../pages/store.js';
-import { recomputePriorityForCompanyRoles, recomputePriorityForRole } from '../../scoring/priority.js';
 
 const structuralScript = fileURLToPath(new URL('../../enrichment/scripts/extract-structural.sh', import.meta.url));
 const researchWebScript = fileURLToPath(new URL('../../enrichment/scripts/research-web.sh', import.meta.url));
@@ -174,8 +173,6 @@ async function handleCompanyStructural(
       context: { name, modelFields: wanted },
     });
 
-    recomputePriorityForCompanyRoles(db, companyId);
-
     recordDerivation(db, {
       entityType: 'company',
       entityId: companyId,
@@ -256,8 +253,6 @@ async function handleRoleStructural(
     if (currentRole?.company_id == null) {
       resolveRoleCompany(db, roleId, extraction);
     }
-
-    recomputePriorityForRole(db, roleId);
 
     recordDerivation(db, {
       entityType: 'role',
@@ -378,8 +373,6 @@ async function handleRoleResearch(db: Database.Database, roleId: number, jobId: 
       context: { salaryMin, salaryMax, remoteEu: normalizeRemoteEu(extraction.remoteEu) },
     });
 
-    recomputePriorityForRole(db, roleId);
-
     recordDerivation(db, { entityType: 'role', entityId: roleId, kind: 'role_research', key, usage, jobId });
   });
   apply.immediate();
@@ -419,8 +412,6 @@ async function handleCompanyResearch(db: Database.Database, companyId: number, j
       type: 'company.research_completed',
       context: { ipoStatus: extraction.ipoStatus ?? null, aiProofScore },
     });
-
-    recomputePriorityForCompanyRoles(db, companyId);
 
     recordDerivation(db, { entityType: 'company', entityId: companyId, kind: 'company_research', key, usage, jobId });
   });
@@ -497,8 +488,6 @@ async function handleCompanyWlb(db: Database.Database, companyId: number, jobId:
       type: 'company.wlb_completed',
       context: { wlbScore },
     });
-
-    recomputePriorityForCompanyRoles(db, companyId);
 
     recordDerivation(db, { entityType: 'company', entityId: companyId, kind: 'company_wlb', key, usage, jobId });
   });

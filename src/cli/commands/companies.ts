@@ -12,7 +12,6 @@ import {
   type Company,
 } from '../../db/repositories/companies.js';
 import { companyFieldGroupStatus, markersByKind } from '../../derive/view-staleness.js';
-import { recomputePriorityForCompanyRoles } from '../../scoring/priority.js';
 import { companyStructuralPayload } from '../../domain/enrichment-payload.js';
 import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
@@ -126,7 +125,6 @@ export function registerCompaniesCommand(program: Command): void {
       reportKnownErrors(KNOWN_ERRORS, () => {
         const db = getDb();
         const company = setPreferenceRating(db, id, rating);
-        recomputePriorityForCompanyRoles(db, id);
         console.log(`Company #${company.id} preference rating set to ${company.preference_rating}`);
       });
     });

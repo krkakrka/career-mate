@@ -143,6 +143,7 @@ describe('0002_nullable_role_company migration', () => {
       '0004_page_snapshots.sql',
       '0005_derivations.sql',
       '0006_model_calls.sql',
+      '0007_drop_priority_score.sql',
     ]);
     db.close();
   });
@@ -244,5 +245,36 @@ describe('0004_page_snapshots migration', () => {
     const second = openDb(dbPath);
     expect((second.prepare('SELECT COUNT(*) as c FROM page_snapshots').get() as { c: number }).c).toBe(1);
     second.close();
+  });
+});
+
+describe('0007_drop_priority_score migration', () => {
+  it('removes the stored score, leaving every other role column and its data intact', () => {
+    const db = openDb(dbPath);
+    const companyId = db.prepare('INSERT INTO companies (url, name) VALUES (?, ?)').run(
+      'https://example.com',
+      'Example Co',
+    ).lastInsertRowid as number;
+    db.prepare('INSERT INTO roles (company_id, url, title, salary_min) VALUES (?, ?, ?, ?)').run(
+      companyId,
+      'https://example.com/jobs/1',
+      'Engineer',
+      90000,
+    );
+
+    const columns = (db.pragma('table_info(roles)') as { name: string }[]).map((column) => column.name);
+    expect(columns).not.toContain('priority_score');
+    // The score is computed on read now; everything it was computed *from*
+    // must still be here.
+    expect(columns).toEqual(expect.arrayContaining(['id', 'company_id', 'url', 'title', 'salary_min', 'remote_eu']));
+
+    const role = db.prepare('SELECT * FROM roles WHERE url = ?').get('https://example.com/jobs/1') as {
+      title: string;
+      salary_min: number;
+    };
+    expect(role.title).toBe('Engineer');
+    expect(role.salary_min).toBe(90000);
+
+    db.close();
   });
 });

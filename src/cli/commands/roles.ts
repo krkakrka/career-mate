@@ -15,7 +15,10 @@ import {
   type Role,
 } from '../../db/repositories/roles.js';
 import { markersByKind, roleFieldGroupStatus } from '../../derive/view-staleness.js';
+import { loadPreferences } from '../../config/preferences.js';
+import { loadScoringWeights } from '../../config/scoring.js';
 import { ROLE_STATUSES } from '../../domain/role-status.js';
+import { scoreRole, scoreRoleWithConfig } from '../../scoring/priority.js';
 import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
 import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
@@ -33,7 +36,7 @@ function suffix(marker: string | undefined): string {
   return marker ? `  ${marker}` : '';
 }
 
-function printRoleDetail(role: Role, markers: Map<string, string>): void {
+function printRoleDetail(role: Role, markers: Map<string, string>, score: number): void {
   const structural = suffix(markers.get('role_structural'));
   const research = suffix(markers.get('role_research'));
 
@@ -45,7 +48,7 @@ function printRoleDetail(role: Role, markers: Map<string, string>): void {
   console.log(`Salary: ${role.salary_min ?? '?'} - ${role.salary_max ?? '?'}${research}`);
   console.log(`Equity: ${role.equity ?? '(unknown)'}${research}`);
   console.log(`Remote/EU: ${role.remote_eu ?? '(unknown)'}${research}`);
-  console.log(`Priority score: ${role.priority_score ?? '(not yet scored)'}`);
+  console.log(`Priority score: ${score.toFixed(2)}`);
   console.log(`Created: ${role.created_at}`);
 }
 
@@ -74,7 +77,7 @@ export function registerRolesCommand(program: Command): void {
             console.log(`Already tracking role #${existing.id}: ${existing.url}`);
             const groups = roleFieldGroupStatus(db, existing);
             enqueueRecomputesAndRun(db, 'role', existing.id, groups);
-            printRoleDetail(existing, markersByKind(groups));
+            printRoleDetail(existing, markersByKind(groups), scoreRoleWithConfig(db, existing));
             return;
           }
           enqueueEnrichment(db, roleStructuralPayload(existing.id, true));
@@ -111,8 +114,17 @@ export function registerRolesCommand(program: Command): void {
         console.log('No roles match.');
         return;
       }
+      // Loaded once for the whole list, not once per row.
+      const weights = loadScoringWeights();
+      const preferences = loadPreferences();
+      const scored = rows.map((role) => ({ role, score: scoreRole(db, role, weights, preferences) }));
+      // Sorting here rather than in SQL is what lets the score stay
+      // unstored: a `set-preference` is reflected on the very next list,
+      // with no recompute job in between.
+      if (opts.sort === 'priority') scored.sort((a, b) => b.score - a.score);
+
       let anyOutstanding = false;
-      for (const role of rows) {
+      for (const { role, score } of scored) {
         // Same lazy-recompute treatment as `companies list`: roles are the
         // view looked at most, so leaving it out meant the primary daily
         // list never showed a marker and never healed itself.
@@ -121,7 +133,7 @@ export function registerRolesCommand(program: Command): void {
         const marker = groups.some((group) => group.marker === '(stale)') ? '  (stale)' : '';
 
         const companyLabel = role.company_id !== null ? `company#${role.company_id}` : 'company(pending)';
-        const priorityLabel = role.priority_score != null ? `priority=${role.priority_score.toFixed(2)}` : 'priority=?';
+        const priorityLabel = `priority=${score.toFixed(2)}`;
         console.log(
           `#${role.id}  ${role.title ?? '(untitled)'}  ${companyLabel}  status=${role.status}  ${priorityLabel}  ${role.url}${marker}`,
         );
@@ -144,7 +156,7 @@ export function registerRolesCommand(program: Command): void {
       }
       const groups = roleFieldGroupStatus(db, role);
       enqueueRecomputesAndRun(db, 'role', role.id, groups);
-      printRoleDetail(role, markersByKind(groups));
+      printRoleDetail(role, markersByKind(groups), scoreRoleWithConfig(db, role));
 
       const history = getStatusHistory(db, id);
       if (history.length > 0) {

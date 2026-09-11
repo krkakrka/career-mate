@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { loadPreferences, type Preferences } from '../config/preferences.js';
 import { loadScoringWeights, type ScoringWeights } from '../config/scoring.js';
 import { getCompanyById, type Company } from '../db/repositories/companies.js';
-import { getRoleById, listRoleIdsForCompany, type Role } from '../db/repositories/roles.js';
+import type { Role } from '../db/repositories/roles.js';
 
 export interface PriorityScoreInputs {
   role: Role;
@@ -68,29 +68,23 @@ export function computePriorityScore(inputs: PriorityScoreInputs): number {
   return terms.reduce((sum, [weight, term]) => sum + weight * term, 0);
 }
 
-function persistScore(db: Database.Database, roleId: number, score: number): void {
-  db.prepare(
-    "UPDATE roles SET priority_score = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-  ).run(score, roleId);
-}
-
-/** Recomputes and persists priority_score for one role — call after anything that changes its own data (structural fetch, comp/equity/remote-EU research). */
-export function recomputePriorityForRole(db: Database.Database, roleId: number): void {
-  const role = getRoleById(db, roleId);
-  if (!role) return;
+/**
+ * The score for one role, read straight from current data.
+ *
+ * Loaders are passed in rather than read here so a caller listing 200 roles
+ * reads `scoring.json`/`preferences.json` once, not once per row.
+ */
+export function scoreRole(
+  db: Database.Database,
+  role: Role,
+  weights: ScoringWeights,
+  preferences: Preferences,
+): number {
   const company = role.company_id != null ? (getCompanyById(db, role.company_id) ?? null) : null;
-  const score = computePriorityScore({
-    role,
-    company,
-    weights: loadScoringWeights(),
-    preferences: loadPreferences(),
-  });
-  persistScore(db, roleId, score);
+  return computePriorityScore({ role, company, weights, preferences });
 }
 
-/** Recomputes every role at a company — call after anything that changes company-level data (structural fetch, IPO/AI-proof/WLB research, manual preference rating). */
-export function recomputePriorityForCompanyRoles(db: Database.Database, companyId: number): void {
-  for (const roleId of listRoleIdsForCompany(db, companyId)) {
-    recomputePriorityForRole(db, roleId);
-  }
+/** Convenience for the single-entity views, where loading the config once per call is free. */
+export function scoreRoleWithConfig(db: Database.Database, role: Role): number {
+  return scoreRole(db, role, loadScoringWeights(), loadPreferences());
 }

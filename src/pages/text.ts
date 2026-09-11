@@ -200,8 +200,18 @@ export function deriveText(html: string): string {
 
   const body = normalizeWhitespace(
     decodeHtmlEntities(
-      inlineAnchorHrefs(html.replace(/<!--[\s\S]*?-->/g, ' '))
-        .replace(new RegExp(`<(${NOISE_TAGS})\\b[^>]*>[\\s\\S]*?</\\1>`, 'gi'), ' ')
+      // Anchors are inlined only AFTER script/style contents are gone.
+      // Inline JS routinely contains HTML templates ("<a href='...'>" in a
+      // __NEXT_DATA__ blob), and an unterminated one of those pairs with
+      // the next real </a> in the body — attributing a CDN or tracking URL
+      // to a genuine link's text. Since the model is asked for companyUrl
+      // from link targets, that attaches the wrong domain as the employer,
+      // and the corrupted text is what gets hashed into text_hash.
+      inlineAnchorHrefs(
+        html
+          .replace(/<!--[\s\S]*?-->/g, ' ')
+          .replace(new RegExp(`<(${NOISE_TAGS})\\b[^>]*>[\\s\\S]*?</\\1>`, 'gi'), ' '),
+      )
         // <title> is removed rather than the whole <head>: both <head> and
         // </head> are optional in HTML5 and minifiers drop them, so any
         // regex keyed on those boundaries silently fails to match and emits

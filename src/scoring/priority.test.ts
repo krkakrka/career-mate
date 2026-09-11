@@ -8,7 +8,7 @@ import type { ScoringWeights } from '../config/scoring.js';
 import { openDb } from '../db/client.js';
 import { createCompany, getCompanyById, setPreferenceRating } from '../db/repositories/companies.js';
 import { createRole, getRoleById } from '../db/repositories/roles.js';
-import { computePriorityScore, recomputePriorityForCompanyRoles, recomputePriorityForRole } from './priority.js';
+import { computePriorityScore, scoreRoleWithConfig } from './priority.js';
 import { restoreEnv } from '../../test/helpers/env.js';
 
 const EQUAL_WEIGHTS: ScoringWeights = {
@@ -41,8 +41,7 @@ function baseRole(overrides: Record<string, unknown> = {}) {
     salary_max: null,
     equity: null,
     remote_eu: null,
-    priority_score: null,
-    closed_at: null,
+      closed_at: null,
     last_checked_at: null,
     last_enriched_at: null,
     created_at: '2026-01-01T00:00:00.000Z',
@@ -255,7 +254,7 @@ describe('weights scale the contribution of each term', () => {
   });
 });
 
-describe('recomputePriorityForRole / recomputePriorityForCompanyRoles (DB integration)', () => {
+describe('scoreRole (DB integration)', () => {
   let tempDir: string;
   let db: Database.Database;
   let originalDataDir: string | undefined;
@@ -273,33 +272,33 @@ describe('recomputePriorityForRole / recomputePriorityForCompanyRoles (DB integr
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('persists a computed score onto the role row', () => {
+  it('scores a role from current data, with nothing stored', () => {
     const role = createRole(db, { url: 'https://example.com/jobs/1' });
-    expect(getRoleById(db, role.id)?.priority_score).toBeNull();
 
-    recomputePriorityForRole(db, role.id);
+    const score = scoreRoleWithConfig(db, role);
 
-    const updated = getRoleById(db, role.id);
-    expect(updated?.priority_score).not.toBeNull();
-    expect(typeof updated?.priority_score).toBe('number');
+    expect(typeof score).toBe('number');
+    expect(Number.isFinite(score)).toBe(true);
+    // Nothing was written: the score is a function of the data, not a
+    // column that can drift out of date with it.
+    expect(Object.keys(getRoleById(db, role.id)!)).not.toContain('priority_score');
   });
 
-  it('recomputes every role at a company when company-level data changes', () => {
+  it('reflects a company preference change on the very next read, with no recompute in between', () => {
     const company = createCompany(db, 'https://acme.example.com', 'Acme');
     const roleA = createRole(db, { companyId: company.id, url: 'https://example.com/jobs/a' });
     const roleB = createRole(db, { companyId: company.id, url: 'https://example.com/jobs/b' });
-    recomputePriorityForRole(db, roleA.id);
-    recomputePriorityForRole(db, roleB.id);
-    const beforeA = getRoleById(db, roleA.id)!.priority_score!;
-    const beforeB = getRoleById(db, roleB.id)!.priority_score!;
+    const beforeA = scoreRoleWithConfig(db, getRoleById(db, roleA.id)!);
+    const beforeB = scoreRoleWithConfig(db, getRoleById(db, roleB.id)!);
 
     setPreferenceRating(db, company.id, 2);
-    recomputePriorityForCompanyRoles(db, company.id);
 
-    const afterA = getRoleById(db, roleA.id)!.priority_score!;
-    const afterB = getRoleById(db, roleB.id)!.priority_score!;
-    expect(afterA).toBeGreaterThan(beforeA);
-    expect(afterB).toBeGreaterThan(beforeB);
+    // This is the point of computing on read: priority was the only
+    // multi-input derivation, so a stored one needed every company-level
+    // change to fan out a recompute across all its roles. Now there is
+    // nothing to fan out.
+    expect(scoreRoleWithConfig(db, getRoleById(db, roleA.id)!)).toBeGreaterThan(beforeA);
+    expect(scoreRoleWithConfig(db, getRoleById(db, roleB.id)!)).toBeGreaterThan(beforeB);
     expect(getCompanyById(db, company.id)?.preference_rating).toBe(2);
   });
 });

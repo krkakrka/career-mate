@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { numberOr } from '../lib/config-coerce.js';
 import { loadJsonConfig } from '../lib/json-config.js';
 import { getDataDir } from '../lib/paths.js';
 
@@ -25,7 +26,22 @@ function scoringConfigPath(): string {
   return path.join(getDataDir(), 'config', 'scoring.json');
 }
 
-/** Reads .data/config/scoring.json, seeding it with defaults on first access if missing. */
+/**
+ * Reads .data/config/scoring.json, seeding it with defaults on first access
+ * if missing.
+ *
+ * Weights are coerced: a non-numeric one would make the whole score NaN,
+ * which sorts arbitrarily under `--sort priority` and prints as
+ * `priority=NaN` — a silent wrong answer rather than a visible failure.
+ */
 export function loadScoringWeights(): ScoringWeights {
-  return loadJsonConfig(scoringConfigPath(), DEFAULT_WEIGHTS);
+  const weights = loadJsonConfig(scoringConfigPath(), DEFAULT_WEIGHTS);
+  return {
+    comp_fit: numberOr(weights.comp_fit, DEFAULT_WEIGHTS.comp_fit),
+    remote_eu_match: numberOr(weights.remote_eu_match, DEFAULT_WEIGHTS.remote_eu_match),
+    ai_proof: numberOr(weights.ai_proof, DEFAULT_WEIGHTS.ai_proof),
+    wlb: numberOr(weights.wlb, DEFAULT_WEIGHTS.wlb),
+    preference_match: numberOr(weights.preference_match, DEFAULT_WEIGHTS.preference_match),
+    company_preference: numberOr(weights.company_preference, DEFAULT_WEIGHTS.company_preference),
+  };
 }

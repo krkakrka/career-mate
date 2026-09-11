@@ -131,3 +131,29 @@ describe('cm roles', () => {
     expect(lines[0]).toMatch(/^#2\s/);
   });
 });
+
+describe('cm roles list --sort priority', () => {
+  it('orders by a score computed on read, and reflects a preference change on the very next list', () => {
+    runCli(['companies', 'add', 'https://low.example.com'], { dataDir });
+    runCli(['companies', 'add', 'https://high.example.com'], { dataDir });
+    runCli(['roles', 'add', 'https://low.example.com/jobs/1', '--company', '1'], { dataDir });
+    runCli(['roles', 'add', 'https://high.example.com/jobs/2', '--company', '2'], { dataDir });
+
+    runCli(['companies', 'set-preference', '2', '2'], { dataDir });
+
+    // No enrichment has run and no recompute job exists — the score is a
+    // function of current data, so the preference is already reflected.
+    const listed = runCli(['roles', 'list', '--sort', 'priority'], { dataDir });
+    expect(listed.exitCode).toBe(0);
+    const order = listed.stdout.trim().split('\n');
+    expect(order[0]).toContain('high.example.com');
+    expect(order[1]).toContain('low.example.com');
+
+    // Flip the preference the other way; the order follows immediately.
+    runCli(['companies', 'set-preference', '1', '2'], { dataDir });
+    runCli(['companies', 'set-preference', '2', '-2'], { dataDir });
+    const reordered = runCli(['roles', 'list', '--sort', 'priority'], { dataDir }).stdout.trim().split('\n');
+    expect(reordered[0]).toContain('low.example.com');
+    expect(reordered[1]).toContain('high.example.com');
+  });
+});

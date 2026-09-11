@@ -72,7 +72,7 @@ describe('openDb', () => {
       expect.arrayContaining(['id', 'url', 'name', 'preference_rating', 'connections']),
     );
     expect(columnNames(db, 'roles')).toEqual(
-      expect.arrayContaining(['id', 'company_id', 'status', 'priority_score', 'reapply_after']),
+      expect.arrayContaining(['id', 'company_id', 'status', 'reapply_after']),
     );
     expect(columnNames(db, 'jobs')).toEqual(
       expect.arrayContaining(['id', 'topic', 'status', 'priority', 'available_at', 'attempts']),

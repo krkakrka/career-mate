@@ -1,0 +1,14 @@
+-- Priority score is computed on read, never stored.
+--
+-- It was the only multi-input derivation in the system: a function of the
+-- role, its company, the scoring weights and the preference profile, so
+-- *any* of those changing had to trigger a recompute of every affected row.
+-- That is the one place a dependency graph would have been needed, and the
+-- score is pure and cheap enough that not storing it removes the need
+-- entirely — `set-preference` is now reflected on the very next read, with
+-- no job involved.
+--
+-- A plain DROP COLUMN (SQLite 3.35+, and 3.53 is bundled) rather than the
+-- table-recreate dance 0002 needed: nothing references this column, so
+-- there is no FK-cascade trap here.
+ALTER TABLE roles DROP COLUMN priority_score;

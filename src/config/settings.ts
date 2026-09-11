@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { numberOr } from '../lib/config-coerce.js';
 import { loadJsonConfig } from '../lib/json-config.js';
 import { getDataDir } from '../lib/paths.js';
 
@@ -38,17 +39,6 @@ const DEFAULT_SETTINGS: Settings = {
   claude_timeout_seconds: 180,
   recompute_min_interval_minutes: 60,
 };
-
-/**
- * A hand-edited settings.json can contain anything. A non-numeric value
- * here is not cosmetic: `claude_timeout_seconds: "abc"` makes every
- * extraction time out on the next tick, and `claude_max_budget_usd: null`
- * is passed to the CLI as the literal string "null", which it rejects — so
- * every call fails, on a typo, with no obvious cause.
- */
-function numberOr(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
 
 export function loadSettings(): Settings {
   const settings = loadJsonConfig(path.join(getDataDir(), 'config', 'settings.json'), DEFAULT_SETTINGS);
