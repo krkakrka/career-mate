@@ -18,7 +18,7 @@ Every CLI action, daemon event, and job's full lifecycle is durably logged (`cm 
 
 ## Status
 
-The original 14 steps are built. **Phase 2 — memoized data pipeline** (steps 15-22 in [PLAN.md](./PLAN.md)) is the current work: it changes how the tool handles data so that fetching is done once and remembered, the model is only called when an input actually changed, and every result is inspectable on disk. See PLAN.md for the step table (with a Status column) and design rationale — each step's row documents what was built, why, and what independent review caught along the way.
+All 22 steps are built: the original 14, plus **Phase 2 — memoized data pipeline** (steps 15-22), which changed how the tool handles data so that fetching is done once and remembered, the model is called only when an input actually changed, and every result is inspectable on disk. See [PLAN.md](./PLAN.md) for the step table and design rationale — each row documents what was built, why, and what independent review caught along the way, including several real bugs (a derivation that could claim work it hadn't done, a prompt change that silently broke company resolution, a flag change that silently disabled web search).
 
 Known non-working path: login-gated research (Glassdoor via Playwright). The WLB job short-circuits because no `urlTemplate` is configured, and Google sign-in inside an automated browser is refused by Google, so `cm auth login-browser` cannot complete a Google-backed login. It is deprioritized; see the Phase 2 backlog for the replacement.
 
@@ -46,10 +46,12 @@ sync (fetch, no model)  →  derive (deterministic first, model only if needed) 
 - **Deterministic derivations run first** and are free: HTML to text, `<title>`/`og:title`, HTTP 404/410, a closure-phrase list. The model only sees what those can't decide, and it sees text, not HTML.
 - **Model-derived values remember their inputs.** Each (entity, kind) has a `derivations` row recording the input hash and the hash of the prompt script that produced it, plus the model used and what it cost.
 - **Staleness is a hash comparison, done lazily on read.** If the newest snapshot or the prompt script no longer matches what a value was derived from, `cm roles show` prints the old value with `(stale)` and enqueues one recompute job (debounced). Nothing is recomputed eagerly; stale data is visible rather than silently wrong, and it heals itself when the daemon runs.
-- **`--force` means one thing: take a new snapshot now.** It never overwrites derived data directly. `cm roles add <url>` on a URL you already track is a no-op that prints the existing role; `--force` refetches, and any derivation whose input changed becomes stale by definition.
-- **Snapshot refresh policy is separate from staleness.** `settings.page_refresh_days` says how old a snapshot may be before `refresh`/`add` fetch again. Whether derived data matches that snapshot is the hash check above.
-- **Priority score is computed on read**, never stored.
-- **`claude` calls are sandboxed and budgeted**: extraction uses the cheapest model with no tools, research uses a mid-tier model with web search only, no user settings or hooks load inside the call, and each call has a turn limit, a dollar cap and a timeout. Fetched page content is untrusted input; those flags are what stop an instruction embedded in a job posting from reading local files or leaking them via a web search.
+- **`--force` means: fetch this page again now, and re-derive from it.** `cm roles add <url>` on a URL you already track prints the existing role and exits 0; `--force` takes a fresh snapshot and re-runs extraction. (The original design had `--force` mean *only* "new snapshot", on the reasoning that a changed snapshot makes derivations stale by itself — but when the page hasn't changed, the new snapshot hashes the same and nothing recomputes, leaving no way at all to redo an extraction the model got wrong.)
+- **Snapshot refresh policy is separate from staleness.** `settings.page_refresh_days` says how old a snapshot may be before `add`/`rerun-enrichment` fetch again. Whether derived data matches that snapshot is the hash check above. **`cm refresh` deliberately ignores it**: "has this posting closed?" is a question about the live page, and answering it from a three-day-old snapshot reports a closed role as open while costing the same as a real check.
+- **Priority score is computed on read**, never stored — it was the only multi-input derivation (role + company + weights + preferences), so storing it meant any of those changing had to fan out a recompute. A `set-preference` now shows in the very next `cm roles list`.
+- **`claude` calls are sandboxed and budgeted**: extraction uses haiku with `--tools ""`, research uses sonnet with web search only, `--setting-sources ""` and `--strict-mcp-config` keep user hooks, settings and MCP servers out of the call, and each has a dollar cap (`settings.claude_max_budget_usd`) and a hard timeout (`settings.claude_timeout_seconds`) and runs in an empty scratch directory. Fetched page content is untrusted input, and those flags are what stop an instruction embedded in a job posting from reading local files. Note the limit of that guarantee: extraction calls get no tools at all, but a *research* call has web search, and its prompt includes a role title/description that extraction derived from the posting — so attacker-controlled text can still influence what that call searches for. Narrowing it further would mean not passing extracted text into a tool-enabled call at all.
+- **Spend is recorded per call** in an append-only `model_calls` ledger, and `cm status` reports 7- and 30-day totals. Failed calls count too — a call that hits its budget cap and exits non-zero has still been paid for.
+- **The daemon looks after itself**: it logs crashes, requeues jobs a dead daemon left `running` (giving up on one that keeps killing it), exits when its data directory disappears, and exits after 30 idle minutes since the next `cm` command starts a fresh one.
 
 All data lives under `.data/` (gitignored): the SQLite database, page snapshots, hand-tuned config, the daemon log, the browser profile, and per-role reference files (CVs, application answers).
 
@@ -85,8 +87,8 @@ Full schema and field-level detail: see [PLAN.md § Data model](./PLAN.md#data-m
 
 ```bash
 npm install
-npm test           # run tests (vitest). Offline by default from Phase 2 step 21; until then several suites call the real `claude` CLI and take minutes
-npm run test:live  # (from step 21) the suites that need a real `claude` login and network
+npm test           # offline, deterministic, free — ~40s. No network, no `claude` calls.
+npm run test:live  # the `*.live.test.ts` suites: real `claude`, real network, minutes, costs money
 npm run test:watch
 npm run typecheck  # tsc --noEmit
 ```
@@ -103,6 +105,8 @@ npm unlink -g career-mate   # to undo
 
 **Stack**: TypeScript (Node, ESM) + `better-sqlite3` + `commander`. Tests use [Vitest](https://vitest.dev), primarily black-box: invoking the built `cm` binary against an isolated temp `.data` directory and asserting on stdout/exit code/DB state.
 
+`npm test` points `CM_CLAUDE_BIN` at `test/fixtures/fake-claude.py`, a stand-in invoked exactly as the real binary is. It answers only the keys each prompt's declared response shape asks for, and refuses a prompt it doesn't recognise rather than inventing an answer — so a prompt rewritten past recognition breaks loudly instead of passing against a fake that would answer anything. The handful of tests that must exercise the real model are named `*.live.test.ts`.
+
 **Delivery process**: each step in [PLAN.md](./PLAN.md) is implemented with tests first, then sent through an independent code review before committing — see [PLAN.md § Delivery process](./PLAN.md#delivery-process--commitable-steps).
 
 ## Project layout
@@ -114,8 +118,8 @@ career-mate/
     daemon/         # worker pool, job handlers
     db/             # migrations, WAL-mode client, repositories
     enrichment/     # claude-CLI-backed extraction scripts + source recipes
-    pages/          # (Phase 2) page store: snapshot, hash, html→text
-    derive/         # (Phase 2) derivation keys, staleness check, deterministic extractors
+    pages/          # page store: snapshot, hash, html→text
+    derive/         # derivation keys + recipes, staleness, deterministic extractors
     browser/        # Playwright persistent-profile helpers (non-working path, see Status)
     scoring/         # priority score calculation
     reporting/       # cm status's pipeline digest query logic
