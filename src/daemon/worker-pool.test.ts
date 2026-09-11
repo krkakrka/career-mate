@@ -4,7 +4,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb } from '../db/client.js';
-import { enqueueJob, getJobById } from '../db/repositories/jobs.js';
+import { enqueueJob, getJobById, listJobs } from '../db/repositories/jobs.js';
 import { drainOnce, startPolling } from './worker-pool.js';
 
 let tempDir: string;
@@ -136,5 +136,39 @@ describe('startPolling', () => {
     // More than one call proves ticks kept getting rescheduled after failing, not just the first.
     expect(errorSpy.mock.calls.length).toBeGreaterThan(1);
     errorSpy.mockRestore();
+  });
+});
+
+describe('stop() actually stops', () => {
+  it('abandons the rest of the queue instead of draining it', async () => {
+    for (let i = 0; i < 20; i += 1) {
+      enqueueJob(db, { topic: 'notification', payload: { index: i } });
+    }
+
+    let handled = 0;
+    const handlers = {
+      notification: async (): Promise<void> => {
+        handled += 1;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      },
+    };
+
+    const handle = startPolling({ db, handlers, concurrency: { notification: 1 } }, 5);
+    // Let a couple of jobs run, then ask it to stop from outside, the way
+    // SIGTERM does.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await handle.stop();
+    const handledAtStop = handled;
+
+    // Without the stopped check inside drainSlot, stop() waited for every
+    // claimable job in every topic — so a shutdown with a full queue kept
+    // claiming and running jobs (each able to spend a full model budget and
+    // take the full timeout) for minutes after being asked to stop.
+    expect(handledAtStop).toBeLessThan(20);
+    expect(listJobs(db).filter((job) => job.status === 'pending').length).toBeGreaterThan(0);
+
+    // And it stays stopped.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(handled).toBe(handledAtStop);
   });
 });

@@ -82,12 +82,13 @@ function shutdown(): void {
   shuttingDown = true;
   tryRecordOperationalLog(db, { outcome: 'started', component: 'daemon', action: 'shutdown' });
 
-  // Released before the (awaited) stop, not after: while this daemon drains
-  // its last tick, a concurrent `cm` command that enqueues a job would
-  // otherwise see a live pid file, decline to spawn a replacement, and
-  // leave that job pending with nobody to run it. A brief overlap of two
-  // daemons is harmless — job claiming is a single atomic statement.
-  removePidFile();
+  // Killed first, not after the stop: `stop()` waits for the in-flight
+  // handler, and that handler is waiting on this very `claude` call. Doing
+  // it afterwards meant there was never anything left to kill, and a
+  // daemon that took the full 180s timeout to die would be `kill -9`ed by
+  // an impatient user or supervisor — leaving the detached child alive and
+  // still spending, which is exactly what this exists to prevent.
+  killRunningExtractions();
 
   handle
     .stop()
@@ -96,10 +97,14 @@ function shutdown(): void {
       () => false, // best-effort — we're exiting either way, but this still decides what gets logged below.
     )
     .then((stoppedCleanly) => {
-      // Before the pid file goes: an in-flight `claude` runs in its own
-      // process group, so nothing else would ever kill it. Left behind it
-      // keeps spending up to --max-budget-usd with no timeout watching it.
-      killRunningExtractions();
+      // The pid file is held until we are actually done. Releasing it at
+      // the start of shutdown made `cm daemon status` report "not running"
+      // for a daemon still working, left `cm daemon stop` with no pid to
+      // signal, and — since `crash()` unlinks too — let a dying daemon
+      // delete a *replacement* daemon's pid file. Shutdown is fast now
+      // that stop() really stops, so the window this was meant to close is
+      // one job at most.
+      removePidFile();
       tryRecordOperationalLog(db, {
         severity: stoppedCleanly ? 'info' : 'warn',
         outcome: stoppedCleanly ? 'succeeded' : 'failed',

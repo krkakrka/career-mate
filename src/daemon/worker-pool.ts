@@ -13,6 +13,14 @@ export interface WorkerPoolOptions {
   concurrency: Partial<Record<JobTopic, number>>;
   maxAttempts?: number;
   backoffMs?: number;
+  /**
+   * Consulted between jobs. Without it, `stop()` did not stop anything —
+   * it waited for every claimable job in every topic to finish, so a
+   * shutdown with ten enrichment jobs queued kept claiming and running
+   * them (each able to spend a full budget and take the full timeout) for
+   * many minutes after the daemon was asked to stop.
+   */
+  isStopped?: () => boolean;
 }
 
 const DEFAULT_CONCURRENCY = 1;
@@ -23,6 +31,8 @@ async function drainSlot(options: WorkerPoolOptions, topic: JobTopic): Promise<n
 
   let processed = 0;
   for (;;) {
+    if (options.isStopped?.()) return processed;
+
     const job = claimNextJob(options.db, topic);
     if (!job) return processed;
     processed += 1;
@@ -89,7 +99,7 @@ export function startPolling(
 
   const tick = (): void => {
     if (stopped) return;
-    currentRun = drainOnce(options)
+    currentRun = drainOnce({ ...options, isStopped: () => stopped })
       .then((workDone) => {
         const reason = lifecycle.shouldStop?.(workDone);
         if (reason !== undefined) {

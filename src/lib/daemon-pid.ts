@@ -35,8 +35,17 @@ export function claimPidFile(pid: number): PidClaimResult {
   }
 }
 
-export function removePidFile(): void {
+/**
+ * Releases the pid file, but only if this process still owns it.
+ *
+ * An unconditional unlink lets a dying daemon delete a *replacement*
+ * daemon's claim — leaving the replacement an orphan that `cm daemon stop`
+ * cannot find, and the next `cm` command spawning a third. The ownership
+ * check makes the release safe from any exit path, including `crash()`.
+ */
+export function removePidFile(owner = process.pid): void {
   try {
+    if (readPidFile() !== owner) return;
     fs.unlinkSync(pidFilePath());
   } catch {
     // already gone — fine.

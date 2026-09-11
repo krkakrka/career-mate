@@ -14,7 +14,12 @@ import {
   setStatus,
   type Role,
 } from '../../db/repositories/roles.js';
-import { markersByKind, recomputeFloorMs, roleFieldGroupStatus } from '../../derive/view-staleness.js';
+import {
+  currentRecipeVersions,
+  markersByKind,
+  recomputeFloorMs,
+  roleFieldGroupStatus,
+} from '../../derive/view-staleness.js';
 import { loadPreferences } from '../../config/preferences.js';
 import { loadScoringWeights } from '../../config/scoring.js';
 import { ROLE_STATUSES } from '../../domain/role-status.js';
@@ -125,12 +130,13 @@ export function registerRolesCommand(program: Command): void {
 
       // Read once for the whole list, like the scoring weights above.
       const floorMs = recomputeFloorMs();
+      const recipes = currentRecipeVersions();
       let anyOutstanding = false;
       for (const { role, score } of scored) {
         // Same lazy-recompute treatment as `companies list`: roles are the
         // view looked at most, so leaving it out meant the primary daily
         // list never showed a marker and never healed itself.
-        const groups = roleFieldGroupStatus(db, role);
+        const groups = roleFieldGroupStatus(db, role, recipes);
         anyOutstanding = queueRecomputes(db, 'role', role.id, groups, floorMs) || anyOutstanding;
         const marker = groups.some((group) => group.marker === '(stale)') ? '  (stale)' : '';
 

@@ -19,6 +19,23 @@ import { contextKey, type DerivationKey } from './keys.js';
 import { researchRecipeVersion, structuralRecipeVersion } from './recipes.js';
 import { isStale, type StalenessReason } from './staleness.js';
 
+/**
+ * The recipe hashes for one command, computed once.
+ *
+ * Each of these reads a script (and `sources.json`) off disk and hashes it.
+ * Called per row, a `cm roles list` over 200 roles does 600 file reads and
+ * hashes — the exact per-row cost the surrounding code hoists weights and
+ * settings out of the loop to avoid.
+ */
+export interface RecipeVersions {
+  structural: string;
+  research: string;
+}
+
+export function currentRecipeVersions(): RecipeVersions {
+  return { structural: structuralRecipeVersion(), research: researchRecipeVersion() };
+}
+
 export interface FieldGroupStatus {
   kind: DerivationKind;
   reason: StalenessReason;
@@ -44,10 +61,10 @@ function markerFor(reason: StalenessReason): FieldGroupStatus['marker'] {
  * There is no input to be inconsistent with, and a recompute would have
  * nothing to read.
  */
-function pageKey(db: Database.Database, url: string): DerivationKey | undefined {
+function pageKey(db: Database.Database, url: string, recipeVersion: string): DerivationKey | undefined {
   const snapshot = getLatestSuccessfulSnapshot(db, hashUrl(url));
   if (!snapshot?.text_hash) return undefined;
-  return { sourceKey: snapshot.text_hash, recipeVersion: structuralRecipeVersion() };
+  return { sourceKey: snapshot.text_hash, recipeVersion };
 }
 
 function statusFor(
@@ -69,22 +86,30 @@ function statusFor(
  * without doing the fetch — and doing a fetch to render a list would defeat
  * the point of checking laziness by hash.
  */
-export function companyFieldGroupStatus(db: Database.Database, company: Company): FieldGroupStatus[] {
+export function companyFieldGroupStatus(
+  db: Database.Database,
+  company: Company,
+  recipes: RecipeVersions = currentRecipeVersions(),
+): FieldGroupStatus[] {
   return [
-    statusFor(db, 'company', company.id, 'company_structural', pageKey(db, company.url)),
+    statusFor(db, 'company', company.id, 'company_structural', pageKey(db, company.url, recipes.structural)),
     statusFor(db, 'company', company.id, 'company_research', {
       sourceKey: contextKey(buildCompanyResearchContext(company)),
-      recipeVersion: researchRecipeVersion(),
+      recipeVersion: recipes.research,
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);
 }
 
-export function roleFieldGroupStatus(db: Database.Database, role: Role): FieldGroupStatus[] {
+export function roleFieldGroupStatus(
+  db: Database.Database,
+  role: Role,
+  recipes: RecipeVersions = currentRecipeVersions(),
+): FieldGroupStatus[] {
   return [
-    statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url)),
+    statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url, recipes.structural)),
     statusFor(db, 'role', role.id, 'role_research', {
       sourceKey: contextKey(buildRoleResearchContext(db, role)),
-      recipeVersion: researchRecipeVersion(),
+      recipeVersion: recipes.research,
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);
 }

@@ -11,7 +11,12 @@ import {
   setPreferenceRating,
   type Company,
 } from '../../db/repositories/companies.js';
-import { companyFieldGroupStatus, markersByKind, recomputeFloorMs } from '../../derive/view-staleness.js';
+import {
+  companyFieldGroupStatus,
+  currentRecipeVersions,
+  markersByKind,
+  recomputeFloorMs,
+} from '../../derive/view-staleness.js';
 import { companyStructuralPayload } from '../../domain/enrichment-payload.js';
 import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
 import { reportKnownErrors } from '../handle-known-errors.js';
@@ -85,9 +90,10 @@ export function registerCompaniesCommand(program: Command): void {
       }
       // Read once for the whole list, like the scoring weights above.
       const floorMs = recomputeFloorMs();
+      const recipes = currentRecipeVersions();
       let anyOutstanding = false;
       for (const company of rows) {
-        const groups = companyFieldGroupStatus(db, company);
+        const groups = companyFieldGroupStatus(db, company, recipes);
         anyOutstanding = queueRecomputes(db, 'company', company.id, groups, floorMs) || anyOutstanding;
         const marker = groups.some((group) => group.marker === '(stale)') ? '  (stale)' : '';
         console.log(

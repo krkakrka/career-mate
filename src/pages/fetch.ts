@@ -34,6 +34,43 @@ export interface RawPage {
 }
 
 /**
+ * Reads the body but stops once the cap is reached.
+ *
+ * `response.text()` buffers the whole body first, so the cap would bound
+ * only what gets stored and hashed — never what gets allocated. A hostile
+ * or misconfigured endpoint streaming hundreds of MB inside the abort
+ * window would OOM the daemon, which (via `uncaughtException`) takes the
+ * whole daemon down. Reading the stream is what makes the cap the memory
+ * guard it claims to be.
+ */
+async function readCapped(response: Response): Promise<{ body: string; truncated: boolean }> {
+  if (!response.body) return { body: await response.text(), truncated: false };
+
+  const decoder = new TextDecoder('utf-8');
+  const reader = response.body.getReader();
+  let body = '';
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // `stream: true` keeps a multi-byte character split across chunk
+      // boundaries intact — decoding each chunk alone yields U+FFFD.
+      body += decoder.decode(value, { stream: true });
+      if (body.length > MAX_CONTENT_LENGTH) {
+        await reader.cancel();
+        return { body, truncated: true };
+      }
+    }
+    body += decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+
+  return { body, truncated: false };
+}
+
+/**
  * Fetches a page's HTML over plain HTTP — no JS execution, no auth. The
  * body is returned unmodified (beyond the length cap): this is the raw
  * source a snapshot stores and hashes, so stripping anything here would
@@ -55,8 +92,7 @@ export async function fetchRawPage(url: string): Promise<RawPage> {
       throw new FetchError(`Failed to fetch ${url}: HTTP ${response.status}`, response.status);
     }
 
-    const body = await response.text();
-    const truncated = body.length > MAX_CONTENT_LENGTH;
+    const { body, truncated } = await readCapped(response);
     return { status: response.status, html: truncateAtCodePoint(body, MAX_CONTENT_LENGTH), truncated };
   } catch (error) {
     // Re-throw our own status-bearing error untouched; only wrap the
