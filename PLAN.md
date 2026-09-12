@@ -205,11 +205,37 @@ Same delivery process as steps 1-14: tests first, implement, independent review,
 - **Company URL normalization on `cm companies add`** (today `https://x.com/` and `https://x.com` create two companies via the CLI, while enrichment dedupes by normalized URL).
 - **macOS banner notifications** (`osascript`) for the `macos` channel that is typed but never dispatched.
 - **Log/job pruning** — `cm logs prune --older-than 90d`, and `done` jobs older than N days.
-- **Personal note files** (`urls.txt`, `learnings.txt`, `issues.txt`) — move under a gitignored `notes/` dir so `git add -A` can't commit them.
+- **Personal note files** (`urls.txt`, `learnings.txt`, `issues.txt`) — move under a gitignored `notes/` dir so `git add -A` can't commit them. *(Partly addressed: they are now listed in `.gitignore`.)*
+- **Surface stuck work in `cm status`** — jobs sitting in `running` past `stale_running_job_minutes`, and `failed` ones. Read-only commands deliberately don't start a daemon, so a purely read-only session never learns that a job is stranded; `cm status` is where that belongs, and it needs no daemon to report it.
 
 ## Verification (whole-system, post-build)
 
-After Phase 2 (steps 15-22), add to the list below:
+**Phase 2 items 8-12 were run end-to-end on 2026-09-12** against a local fixture server with the real
+`claude` and a real daemon, in a scratch `CM_DATA_DIR`. All 12 checks pass. It found two genuine
+bugs, both fixed:
+
+- **Model spend was attributed to the wrong model.** A research call's envelope lists more than one
+  model, and `readModel` picked the one with the most tokens. Measured from a real envelope: haiku
+  1023 in / 14 out for $0.0011, sonnet 2 in / 101 out for $0.0270 — so the token heuristic recorded
+  96% of the money against haiku. Attribution is by per-model `costUSD` now, with tokens as the
+  fallback.
+- **The recompute floor rate-limited prompt edits.** Item 10 expects exactly one recompute per entity
+  after editing `extract-structural.sh`; it queued **none**, because Step 18's
+  `recompute_min_interval_minutes` applied to every staleness reason. The floor exists for page churn
+  ("Posted 3 days ago", applicant counters), not for a deliberate one-off recipe change whose entire
+  point is to take effect. It now applies only to `source-changed`.
+
+Two things worth knowing, not bugs:
+
+- **A full role add costs ~$0.13**, not "cents": extraction is cheap (haiku, ~$0.004-0.017 per call)
+  but the two research calls are sonnet-with-web-search and dominate (~$0.06-0.12 each). The original
+  "cents, not tens of cents" expectation was written about extraction and does not hold for a role
+  that also triggers research.
+- **Read-only commands do not start a daemon**, so an orphaned `running` job is recovered by the next
+  command that *enqueues* (`roles add`, `refresh` with work to do), not by `cm status` alone. Item 12
+  passes with such a command. See the Backlog for surfacing stuck jobs in `cm status`.
+
+The item list:
 
 8. `cm roles add <url>` twice — second run prints the existing role, exits 0, makes no HTTP request (check `cm logs`) and no model call (`derivations.computed_at` unchanged).
 9. Edit `.data/pages/<hash>/<latest>.txt` is **not** how to test staleness (snapshots are immutable) — instead `cm roles add <url> --force` after the posting text changed; `cm roles show` prints `(stale)` on the structural group, and after the daemon runs, the value updates and `derivations.source_key` equals the new snapshot's `text_hash`.

@@ -11,6 +11,8 @@ import { upsertDerivation } from '../db/repositories/derivations.js';
 import { listJobs } from '../db/repositories/jobs.js';
 import { snapshotPage } from '../pages/store.js';
 import { structuralRecipeVersion } from './recipes.js';
+import type { StalenessReason } from './staleness.js';
+import type { FieldGroupStatus } from './view-staleness.js';
 import { companyFieldGroupStatus, enqueueRecomputes } from './view-staleness.js';
 
 let tempDir: string;
@@ -114,5 +116,32 @@ describe('enqueueRecomputes', () => {
     enqueueRecomputes(db, 'company', company.id, companyFieldGroupStatus(db, company));
 
     expect(listJobs(db).map((job) => JSON.parse(job.payload).kind)).toContain('company-research');
+  });
+});
+
+describe('the recompute floor', () => {
+  it('rate-limits a changed page, but never a changed recipe', () => {
+    const company = createCompany(db, 'https://example.com');
+    upsertDerivation(db, {
+      entityType: 'company',
+      entityId: company.id,
+      kind: 'company_structural',
+      sourceKey: 'text-hash',
+      recipeVersion: 'recipe',
+    });
+
+    const floorMs = 60 * 60 * 1000;
+    const group = (reason: StalenessReason): FieldGroupStatus[] => [
+      { kind: 'company_structural', marker: '(stale)', reason },
+    ];
+
+    // Page churn ("Posted 3 days ago", applicant counters) would otherwise
+    // queue a paid extraction on every single read.
+    expect(enqueueRecomputes(db, 'company', company.id, group('source-changed'), floorMs)).toBe(0);
+
+    // An edited prompt is a deliberate one-off act whose whole point is
+    // that it takes effect — rate-limiting it meant nothing happened for an
+    // hour, with no indication why.
+    expect(enqueueRecomputes(db, 'company', company.id, group('recipe-changed'), floorMs)).toBe(1);
   });
 });

@@ -35,6 +35,7 @@ interface ClaudeUsage {
 interface ClaudeModelUsage {
   inputTokens?: number;
   outputTokens?: number;
+  costUSD?: number;
 }
 
 interface ClaudeResultEnvelope {
@@ -64,18 +65,25 @@ export interface ExtractionResult {
 /**
  * Which model actually answered, from `modelUsage`.
  *
- * A single call can list more than one model — a real research call came
- * back with both `claude-haiku-4-5` and `claude-sonnet-5`, sonnet having
- * done the work and haiku some small sub-task. Taking the first key would
- * have recorded the wrong one, so the busiest by token count wins.
+ * A single call lists more than one model — a research call routinely shows
+ * both `claude-haiku-4-5` and `claude-sonnet-5`, one of them doing a small
+ * ancillary task. Attribution is by **cost**, not token count, because a
+ * measured example had it exactly backwards: haiku 1023 in / 14 out for
+ * $0.0011, sonnet 2 in / 101 out for $0.0270. The token heuristic picked
+ * haiku and recorded 96% of the money against the wrong model; the
+ * expensive one is the one that did the work.
+ *
+ * Token count is the fallback for an envelope that omits per-model cost.
  */
 function readModel(envelope: ClaudeResultEnvelope): string | null {
   const entries = Object.entries(envelope.modelUsage ?? {});
   if (entries.length === 0) return null;
 
-  const tokens = ([, usage]: [string, ClaudeModelUsage]): number =>
-    (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
-  return entries.reduce((busiest, entry) => (tokens(entry) > tokens(busiest) ? entry : busiest))[0];
+  const weight = ([, usage]: [string, ClaudeModelUsage]): number =>
+    typeof usage?.costUSD === 'number'
+      ? usage.costUSD
+      : ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)) / 1e9;
+  return entries.reduce((busiest, entry) => (weight(entry) > weight(busiest) ? entry : busiest))[0];
 }
 
 function readUsage(envelope: ClaudeResultEnvelope): ExtractionUsage {

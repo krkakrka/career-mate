@@ -158,12 +158,17 @@ function isReadyToCompute(
  * Whether enough time has passed since this group was last computed to pay
  * for computing it again.
  *
- * Staleness is honest — the page text really did change — but plenty of job
- * pages change text on every fetch ("Posted 3 days ago", an applicant
- * counter, a rotating token rendered as text), and the closure check
- * re-snapshots on every run. Without a floor, each `cm roles list` would
- * queue a fresh paid extraction for every such role, indefinitely, and the
- * only visible sign would be the spend line.
+ * Applies **only to `source-changed`**. That is the case the floor exists
+ * for: plenty of job pages change text on every fetch ("Posted 3 days ago",
+ * an applicant counter, a rotating token rendered as text), and the closure
+ * check re-snapshots on every run, so without a floor each `cm roles list`
+ * would queue a fresh paid extraction for every such role indefinitely.
+ *
+ * A `recipe-changed` group is not that. Editing a prompt is a deliberate,
+ * one-off act whose whole point is that it takes effect — rate-limiting it
+ * meant an edited prompt did nothing for an hour, with no indication why.
+ * (Caught by the post-build verification, which expected one recompute per
+ * entity after a prompt edit and saw none.)
  */
 function isOutsideRecomputeFloor(
   db: Database.Database,
@@ -171,7 +176,10 @@ function isOutsideRecomputeFloor(
   entityId: number,
   kind: DerivationKind,
   floorMs: number,
+  reason: StalenessReason,
 ): boolean {
+  if (reason !== 'source-changed') return true;
+
   const derivation = getDerivation(db, entityType, entityId, kind);
   if (!derivation) return true; // never computed — nothing to rate-limit
   if (floorMs <= 0) return true;
@@ -202,7 +210,7 @@ export function enqueueRecomputes(
     const payload = recomputePayload(group.kind, entityId);
     if (!payload) continue;
     if (!isReadyToCompute(db, entityType, entityId, group.kind)) continue;
-    if (!isOutsideRecomputeFloor(db, entityType, entityId, group.kind, floorMs)) continue;
+    if (!isOutsideRecomputeFloor(db, entityType, entityId, group.kind, floorMs, group.reason)) continue;
     if (enqueueJobOnce(db, { topic: 'enrichment', payload })) enqueued += 1;
   }
   return enqueued;

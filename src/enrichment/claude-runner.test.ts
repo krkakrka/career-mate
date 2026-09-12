@@ -110,10 +110,10 @@ describe('runExtraction — sandboxing', () => {
 });
 
 describe('runExtraction — usage attribution', () => {
-  it('records the model that did the work, not merely the first one listed', async () => {
-    // A real research call came back listing both haiku and sonnet, sonnet
-    // having done the work and haiku a small sub-task. Taking the first key
-    // would have attributed the call — and its cost — to the wrong model.
+  it('attributes a call to the model that cost the money, not the one with the most tokens', async () => {
+    // Measured from a real research envelope: haiku 1023 in / 14 out for
+    // $0.0011, sonnet 2 in / 101 out for $0.0270. Picking by token count
+    // records 96% of the spend against the wrong model.
     const envelope = JSON.stringify({
       type: 'result',
       is_error: false,
@@ -121,8 +121,8 @@ describe('runExtraction — usage attribution', () => {
       total_cost_usd: 0.033,
       usage: { input_tokens: 10, output_tokens: 5 },
       modelUsage: {
-        'claude-haiku-4-5-20251001': { inputTokens: 20, outputTokens: 3 },
-        'claude-sonnet-5': { inputTokens: 6800, outputTokens: 180 },
+        'claude-haiku-4-5-20251001': { inputTokens: 1023, outputTokens: 14, costUSD: 0.001093 },
+        'claude-sonnet-5': { inputTokens: 2, outputTokens: 101, costUSD: 0.0270244 },
       },
     });
     const stub = script(`cat >/dev/null\ncat <<'JSON'\n${envelope}\nJSON`);
@@ -131,5 +131,20 @@ describe('runExtraction — usage attribution', () => {
 
     expect(usage.model).toBe('claude-sonnet-5');
     expect(usage.costUsd).toBe(0.033);
+  });
+
+  it('falls back to token count when an envelope reports no per-model cost', async () => {
+    const envelope = JSON.stringify({
+      type: 'result',
+      is_error: false,
+      result: '{"ok":true}',
+      modelUsage: {
+        'claude-haiku-4-5-20251001': { inputTokens: 20, outputTokens: 3 },
+        'claude-sonnet-5': { inputTokens: 6800, outputTokens: 180 },
+      },
+    });
+    const stub = script(`cat >/dev/null\ncat <<'JSON'\n${envelope}\nJSON`);
+
+    expect((await runExtraction(stub, [], 'text')).usage.model).toBe('claude-sonnet-5');
   });
 });
