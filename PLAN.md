@@ -208,6 +208,50 @@ Same delivery process as steps 1-14: tests first, implement, independent review,
 - **Personal note files** (`urls.txt`, `learnings.txt`, `issues.txt`) — move under a gitignored `notes/` dir so `git add -A` can't commit them. *(Partly addressed: they are now listed in `.gitignore`.)*
 - **Surface stuck work in `cm status`** — jobs sitting in `running` past `stale_running_job_minutes`, and `failed` ones. Read-only commands deliberately don't start a daemon, so a purely read-only session never learns that a job is stranded; `cm status` is where that belongs, and it needs no daemon to report it.
 
+## Phase 3 — measurement + conversational interface
+
+Decided 2026-09-14, from use rather than review. Two problems with the finished tool, in the user's
+words: *"it's unclear how to use the command from CLI alone — chatting with an agent is MUCH
+easier"*, and *"I want to measure the time it takes... also how many tokens it costs"*. The mental
+model they reach for is a **funnel**: a set of opportunities, each moving through stages.
+
+### The decisions, and why
+
+**Interface: an MCP server, not an in-CLI natural-language router.** Both were costed. A router
+(`cm "mark the Stripe role applied"`) means building and maintaining prompt-to-action translation:
+~2.5K tokens of tool schema per call, ~$0.003 on Haiku 4.5, or ~$0.0006 with the tool block cached —
+against $0.13 for one `roles add`, so cost was never the objection. The objection is that an MCP
+server gets the same thing for **no router at all**: the host model does the translation, and the
+MCP tool list *is* the constrained action set. Less to build, less to maintain, nothing to tune.
+The in-CLI router remains the right answer only for driving the tool from a bare terminal with no
+agent session; it is in the Backlog, not here.
+
+**Forcing a subset of actions** — the user's open question — has three layers, and only the third is
+enforcement. Model-side: `tool_choice: {type: "any"}` compels a tool call rather than prose, and
+`strict: true` makes arguments schema-valid (note: forced tool use returns 400 on Fable 5.1 /
+Mythos 5.1, so a router would have to pin its model). Via the CLI instead of the SDK,
+`--json-schema` gives the same validation with no API key, consistent with this project's existing
+design. **But the actual guarantee is the dispatcher**: a whitelist in TypeScript, with read-only
+actions separated from mutating ones. Model constraints produce well-formed output; they do not
+produce *correct* output. With MCP, the tool registry is that whitelist by construction.
+
+**No MCP SDK.** `@modelcontextprotocol/sdk` is official and correct, but installs 91 packages / 26 MB
+— including express, hono, cors and jose — for what is, over stdio, newline-delimited JSON-RPC 2.0
+with four methods. This project has 36 packages total and has been deliberate about that. The server
+is hand-rolled with no new dependencies, and the risk that buys (protocol drift) is paid for by
+verifying against the **real client** via `claude mcp add`, not only against our own test double —
+the same discipline that caught `--tools "WebSearch"` silently disabling search in Step 18. If
+protocol drift ever does bite, swapping in the SDK is a contained change behind `src/mcp/`.
+
+### Steps
+
+| # | Status | Step | Depends on | What "tests pass" means |
+|---|---|---|---|---|
+| 23 | 🔲 Not started | **Action timing** — migration 0008 adds `duration_ms` to `operational_logs` and `jobs`. The CLI's existing `preAction`/`postAction` hooks record wall time per command; `jobs.ts` records it per job from claim to terminal state. `cm logs` prints it, and `cm status` grows a "slowest actions" line. This is first because every other question in this phase — is the agent path better than the CLI, is Playwright the slow part, what does a conversation cost — is unanswerable without it, and the token/cost half already exists (`model_calls`). | 20 | Seeded records assert duration is recorded and non-negative for a CLI action and for a job's full lifecycle; a failed job still records its duration (the slow failures are the ones worth seeing); `cm logs` renders it; `cm status`'s slowest-actions line is asserted against known-duration rows. |
+| 24 | 🔲 Not started | **Funnel read surface** — `src/reporting/funnel.ts`: opportunities grouped by stage, plus what needs attention (stale, overdue follow-up, reapply ready, closed-but-not-triaged). `cm next` answers "what should I do right now"; bare `cm` prints the board instead of a help screen. Built before the MCP server on purpose: this is the read surface *both* a human and an agent need, and an agent asked "what should I do about my job search" needs exactly one good tool, not twelve small ones. The existing `roles.status` values are already the funnel — this step surfaces them rather than inventing a model. | 23 | Seeded temp DB with roles across stages: the board groups correctly and includes zero-count stages; `cm next` surfaces a stale role, an overdue contact and a ready-to-reapply role, and says so plainly when there is nothing to do; bare `cm` exits 0 and prints the board; `cm --help` still works. |
+| 25 | 🔲 Not started | **MCP server** — `bin/cm-mcp.js` + `src/mcp/`: hand-rolled stdio JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `ping`), tools implemented over the existing repositories with no logic duplicated. Read tools (funnel, next actions, list/show opportunities, logs, spend) and mutating tools (add, set-status, note, recruiter ping, tips, refresh, discover) are declared separately and annotated, so a host can treat them differently. Every tool call goes through the same `operational_logs` path as a CLI action, with `duration_ms` — so the agent path is measured on equal terms with the CLI. | 24 | A test client speaks the real protocol over a pipe: initialize handshake, `tools/list` returns every registered tool with a valid JSON Schema, `tools/call` round-trips a read and a mutation against a temp `CM_DATA_DIR`, an unknown tool name is a JSON-RPC error rather than a crash, malformed JSON on stdin does not kill the server, and every call lands in `operational_logs`. **Manual verification, not automatable:** registered with `claude mcp add` and driven conversationally end to end — the test double proves our reading of the protocol, only the real client proves the protocol. |
+| 26 | 🔲 Not started | **Measured comparison** — a fixed task set ("what should I do today", "add this role", "mark it applied", "what does this company pay") run through both surfaces, reporting wall time, tokens and dollars per task from `operational_logs` + `model_calls`. Answers the question that motivated the phase — *is the agent actually better, and what does it cost* — with numbers rather than impressions, and gives a baseline for the Backlog's in-CLI router if it is ever built. | 25 | The harness runs offline where it can and reports per-task time/tokens/cost; the numbers are recorded in this row so the comparison survives the session. |
+
 ## Verification (whole-system, post-build)
 
 **Phase 2 items 8-12 were run end-to-end on 2026-09-12** against a local fixture server with the real
