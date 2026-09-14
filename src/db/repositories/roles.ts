@@ -44,6 +44,12 @@ export interface ListRolesOptions {
   status?: RoleStatus;
   companyId?: number;
   sort?: 'priority' | 'updated' | 'company';
+  /**
+   * Include terminal statuses (denied/skip/success). The default hides them
+   * because `cm roles list` is a working view; the funnel board wants every
+   * stage, including the ones nothing is expected to move out of.
+   */
+  includeTerminal?: boolean;
 }
 
 export function getRoleById(db: Database.Database, id: number): Role | undefined {
@@ -202,6 +208,8 @@ export function listRoles(db: Database.Database, options: ListRolesOptions = {})
   if (options.status) {
     clauses.push('status = ?');
     params.push(options.status);
+  } else if (options.includeTerminal) {
+    clauses.push('1 = 1');
   } else {
     clauses.push(`status IN (${ACTIVE_ROLE_STATUSES.map(() => '?').join(', ')})`);
     params.push(...ACTIVE_ROLE_STATUSES);

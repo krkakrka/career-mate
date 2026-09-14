@@ -12,6 +12,7 @@ import { registerDaemonCommand } from './commands/daemon.js';
 import { registerWorkerCommand } from './commands/worker.js';
 import { registerEventsCommand } from './commands/events.js';
 import { registerLogsCommand } from './commands/logs.js';
+import { registerFunnelCommands } from './commands/funnel.js';
 import { installCliOperationalLogging, takeRunningAction } from './operational-logging.js';
 
 const program = new Command();
@@ -34,6 +35,7 @@ registerDaemonCommand(program);
 registerWorkerCommand(program);
 registerEventsCommand(program);
 registerLogsCommand(program);
+registerFunnelCommands(program);
 installCliOperationalLogging(program);
 
 try {
@@ -54,8 +56,13 @@ try {
       severity: 'error',
       outcome: 'failed',
       component: 'cli',
-      action: inFlight ? `${inFlight.command} (unhandled)` : 'unhandled-action',
+      // The plain command name, not a decorated one: `listOperationalLogs`
+      // matches `action` exactly, so `cm logs --action refresh` would
+      // otherwise exclude the crashed refresh runs — precisely the ones you
+      // filter for — and `cm status` would list them as an unrelated row.
+      action: inFlight ? inFlight.command : 'unhandled-action',
       error,
+      context: { unhandled: true },
       durationMs: inFlight?.durationMs ?? null,
     });
   } catch {
