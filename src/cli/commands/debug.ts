@@ -1,7 +1,24 @@
 import type { Command } from 'commander';
 import { parseExtractionOutput, runExtractionRaw } from '../../enrichment/claude-extract.js';
 import { captureDir, readExtractionBundle } from '../../enrichment/extraction-capture.js';
+import { InvalidArgumentError } from 'commander';
 import { parsePositiveInt } from '../parsers.js';
+
+/**
+ * Each replay of a real bundle can spend up to `--max-budget-usd`, so a
+ * stray extra zero on `--repeat` turns a debugging run into real money. The
+ * cap is a guardrail against the typo, not a limit anyone should hit
+ * deliberately.
+ */
+const MAX_REPEAT = 50;
+
+function parseRepeat(value: string): number {
+  const parsed = parsePositiveInt(value);
+  if (parsed > MAX_REPEAT) {
+    throw new InvalidArgumentError(`--repeat is capped at ${MAX_REPEAT} (each run can cost real money)`);
+  }
+  return parsed;
+}
 
 /**
  * Re-runs a captured extraction failure against the real (or fake) `claude`
@@ -24,7 +41,7 @@ export function registerDebugCommand(program: Command): void {
   debug
     .command('replay-extraction <bundle>')
     .description('Re-run a captured extraction bundle and show each raw model answer')
-    .option('--repeat <count>', 'How many times to re-run (default 1)', parsePositiveInt)
+    .option('--repeat <count>', `How many times to re-run (default 1, max ${MAX_REPEAT})`, parseRepeat)
     .option('--parse', 'Also attempt to parse each answer and report the outcome')
     .action(async (bundlePath: string, opts: { repeat?: number; parse?: boolean }) => {
       const bundle = readExtractionBundle(bundlePath);
@@ -37,15 +54,20 @@ export function registerDebugCommand(program: Command): void {
       if (bundle.error) console.log(`#   original error: ${bundle.error}`);
       console.log(`#   repeats: ${repeat}\n`);
 
-      let ok = 0;
-      let failed = 0;
+      // Kept apart on purpose: a run that never produced output (timeout,
+      // missing binary, non-zero exit) is an infra/transient failure, not
+      // the model returning bad output — conflating them would let a run of
+      // timeouts read as "deterministic bad output", the opposite verdict.
+      let parsedOk = 0;
+      let parseFailed = 0;
+      let runErrors = 0;
       for (let attempt = 1; attempt <= repeat; attempt++) {
         console.log(`--- attempt ${attempt}/${repeat} ---`);
         let raw: string;
         try {
           raw = await runExtractionRaw(bundle.scriptPath, bundle.args, bundle.stdinContent);
         } catch (error) {
-          failed++;
+          runErrors++;
           console.log(`run failed: ${error instanceof Error ? error.message : String(error)}\n`);
           continue;
         }
@@ -57,10 +79,10 @@ export function registerDebugCommand(program: Command): void {
         if (opts.parse) {
           try {
             const { data } = parseExtractionOutput(raw);
-            ok++;
+            parsedOk++;
             console.log(`\nparsed OK: ${JSON.stringify(data)}`);
           } catch (error) {
-            failed++;
+            parseFailed++;
             console.log(`\nparse FAILED: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
@@ -69,10 +91,18 @@ export function registerDebugCommand(program: Command): void {
 
       if (opts.parse) {
         // The verdict the whole exercise exists to produce.
-        console.log(`# verdict: ${ok}/${repeat} parsed OK, ${failed}/${repeat} failed`);
-        if (failed > 0 && ok > 0) console.log('# intermittent — model output is non-deterministic for this input');
-        else if (failed === repeat) console.log('# deterministic failure — same input reliably produces bad output');
-        else if (ok === repeat) console.log('# no failure reproduced — the original may have been transient');
+        console.log(
+          `# verdict: ${parsedOk}/${repeat} parsed OK, ${parseFailed}/${repeat} bad output, ${runErrors}/${repeat} run errors`,
+        );
+        if (runErrors === repeat) {
+          console.log('# every attempt errored before producing output — likely transient/infra, not the model');
+        } else if (parseFailed > 0 && parsedOk > 0) {
+          console.log('# intermittent — model output is non-deterministic for this input');
+        } else if (parsedOk === 0) {
+          console.log('# deterministic failure — this input reliably produces bad output');
+        } else if (parsedOk === repeat) {
+          console.log('# no failure reproduced — the original may have been transient');
+        }
       }
     });
 

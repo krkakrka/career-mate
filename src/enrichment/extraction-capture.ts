@@ -75,8 +75,8 @@ export function captureExtractionFailure(input: CaptureInput): string | null {
     // Colons are legal in POSIX filenames but awkward to type on the CLI
     // and invalid on other filesystems, so the timestamp uses '-' only. A
     // random suffix keeps two failures in the same millisecond from
-    // colliding — enrichment concurrency is 1, but replay and the daemon
-    // can run at once.
+    // colliding — enrichment concurrency is 1, but a foreground command
+    // (e.g. `cm refresh`) and the daemon can each be capturing at once.
     const stamp = bundle.capturedAt.replace(/[:.]/g, '-');
     const file = path.join(dir, `${stamp}-${process.pid}-${Math.random().toString(16).slice(2, 8)}.json`);
     fs.writeFileSync(file, JSON.stringify(bundle, null, 2));
@@ -108,9 +108,17 @@ function pruneOldBundles(dir: string): void {
   const entries = fs
     .readdirSync(dir)
     .filter((name) => name.endsWith('.json'))
-    .map((name) => {
+    .flatMap((name) => {
       const full = path.join(dir, name);
-      return { full, mtime: fs.statSync(full).mtimeMs };
+      try {
+        // A peer process can prune a file between readdir and stat; a
+        // vanished entry is simply dropped rather than aborting the whole
+        // prune (and, via the outer catch, discarding the path we just
+        // wrote).
+        return [{ full, mtime: fs.statSync(full).mtimeMs }];
+      } catch {
+        return [];
+      }
     })
     .sort((a, b) => b.mtime - a.mtime);
 
