@@ -42,12 +42,16 @@ async function drainSlot(options: WorkerPoolOptions, topic: JobTopic): Promise<n
     // correlation), so a second log here would just duplicate every entry.
     try {
       await handler(job);
-      completeJob(options.db, job.id);
+      // This worker's own claim, not whatever the row says now: the stale
+      // sweep may have requeued it and another worker re-claimed it while
+      // this handler was running.
+      completeJob(options.db, job.id, job.claimed_at);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failJob(options.db, job.id, message, {
         maxAttempts: options.maxAttempts,
         backoffMs: options.backoffMs,
+        claimedAt: job.claimed_at,
       });
     }
   }

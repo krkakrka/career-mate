@@ -25,6 +25,8 @@ function fakeJob(payload: unknown): JobRecord {
     error: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    duration_ms: null,
+    claimed_at: null,
   };
 }
 

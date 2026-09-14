@@ -1,6 +1,7 @@
 import { InvalidArgumentError } from 'commander';
 import { describe, expect, it } from 'vitest';
 import { parseDate } from './parsers.js';
+import { formatDuration } from './commands/logs.js';
 
 describe('parseDate', () => {
   it('accepts a real calendar date and returns UTC-midnight ISO', () => {
@@ -27,5 +28,18 @@ describe('parseDate', () => {
 
   it('rejects a month out of range', () => {
     expect(() => parseDate('2027-13-01')).toThrow(InvalidArgumentError);
+  });
+});
+
+describe('formatDuration', () => {
+  it('keeps a fast action readable in milliseconds', () => {
+    expect(formatDuration(0)).toBe('0ms');
+    expect(formatDuration(999)).toBe('999ms');
+  });
+
+  it('switches to seconds, then minutes — a 4-minute call should not read as 243718ms', () => {
+    expect(formatDuration(1500)).toBe('1.5s');
+    expect(formatDuration(59_400)).toBe('59.4s');
+    expect(formatDuration(243_718)).toBe('4m4s');
   });
 });

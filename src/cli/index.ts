@@ -12,7 +12,7 @@ import { registerDaemonCommand } from './commands/daemon.js';
 import { registerWorkerCommand } from './commands/worker.js';
 import { registerEventsCommand } from './commands/events.js';
 import { registerLogsCommand } from './commands/logs.js';
-import { installCliOperationalLogging } from './operational-logging.js';
+import { installCliOperationalLogging, takeRunningAction } from './operational-logging.js';
 
 const program = new Command();
 
@@ -46,7 +46,18 @@ try {
   try {
     const { getDb } = await import('../db/client.js');
     const { tryRecordOperationalLog } = await import('../db/repositories/operational-logs.js');
-    tryRecordOperationalLog(getDb(), { severity: 'error', outcome: 'failed', component: 'cli', action: 'unhandled-action', error });
+    // Carries the duration of whichever action was in flight, so a slow
+    // failure (a timeout, the case most worth measuring) is timed even
+    // though Commander's postAction hook never runs for a rejection.
+    const inFlight = takeRunningAction();
+    tryRecordOperationalLog(getDb(), {
+      severity: 'error',
+      outcome: 'failed',
+      component: 'cli',
+      action: inFlight ? `${inFlight.command} (unhandled)` : 'unhandled-action',
+      error,
+      durationMs: inFlight?.durationMs ?? null,
+    });
   } catch {
     // best-effort only — the original error below is what matters.
   }

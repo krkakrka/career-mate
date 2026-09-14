@@ -97,6 +97,27 @@ describe('cm show — lazy recompute', () => {
   });
 });
 
+describe('cm — action timing', () => {
+  it('records how long a command took, and shows it in cm logs', () => {
+    runCli(['companies', 'add', 'https://example.com'], { dataDir });
+
+    const logs = runCli(['logs', '--component', 'cli', '--limit', '20'], { dataDir });
+
+    // Every other question in this phase — is the agent path faster than
+    // the CLI, is the browser the slow part — needs this number to exist.
+    expect(logs.stdout).toMatch(/cli\.companies add\s+\d+(ms|\.\ds|m\d+s)/);
+  });
+
+  it('shows where the time goes in cm status', () => {
+    runCli(['companies', 'add', 'https://example.com'], { dataDir });
+
+    const status = runCli(['status'], { dataDir });
+
+    expect(status.stdout).toMatch(/Slowest actions \(7d\):/);
+    expect(status.stdout).toMatch(/cli\.companies add/);
+  });
+});
+
 describe('cm status — model spend', () => {
   it('reports zero spend before anything has run', () => {
     const status = runCli(['status'], { dataDir });

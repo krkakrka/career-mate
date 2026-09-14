@@ -1,6 +1,7 @@
 import type { Command } from 'commander';
 import { loadSettings } from '../../config/settings.js';
 import { getDb } from '../../db/client.js';
+import { formatDuration } from './logs.js';
 import { buildPipelineDigest, type ReapplyRole, type StaleRole } from '../../reporting/pipeline-digest.js';
 import { ROLE_STATUSES } from '../../domain/role-status.js';
 
@@ -37,6 +38,13 @@ export function registerStatusCommand(program: Command): void {
 
       console.log(`\nReapply cooldown still active: ${digest.reapplyUpcoming.length}`);
       for (const role of digest.reapplyUpcoming) printRoleLine(role, `reapply_after ${role.reapplyAfter}`);
+
+      if (digest.slowestActions.length > 0) {
+        console.log('\nSlowest actions (7d):');
+        for (const slow of digest.slowestActions) {
+          console.log(`  ${formatDuration(slow.durationMs).padStart(7)}  ${slow.component}.${slow.action}  ${slow.occurredAt}`);
+        }
+      }
 
       const { last7Days, last30Days } = digest.modelSpend;
       console.log(

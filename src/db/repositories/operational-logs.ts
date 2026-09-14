@@ -15,6 +15,8 @@ export interface OperationalLogRecord {
   entity_id: number | null;
   context: string | null;
   error: string | null;
+  /** Wall time for the action, when it was measured. Null on a `started` record, which has not finished yet. */
+  duration_ms: number | null;
 }
 
 export interface RecordOperationalLogParams {
@@ -27,6 +29,7 @@ export interface RecordOperationalLogParams {
   entityId?: number | null;
   context?: unknown;
   error?: unknown;
+  durationMs?: number | null;
 }
 
 export interface OperationalLogFilters {
@@ -103,8 +106,8 @@ export function recordOperationalLog(
   const result = db
     .prepare(
       `INSERT INTO operational_logs
-       (severity, outcome, component, action, job_id, entity_type, entity_id, context, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (severity, outcome, component, action, job_id, entity_type, entity_id, context, error, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       params.severity ?? (params.outcome === 'failed' ? 'error' : 'info'),
@@ -116,6 +119,7 @@ export function recordOperationalLog(
       params.entityId ?? null,
       context,
       error,
+      params.durationMs ?? null,
     );
   return db.prepare('SELECT * FROM operational_logs WHERE id = ?').get(result.lastInsertRowid) as OperationalLogRecord;
 }

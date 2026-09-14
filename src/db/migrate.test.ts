@@ -144,6 +144,7 @@ describe('0002_nullable_role_company migration', () => {
       '0005_derivations.sql',
       '0006_model_calls.sql',
       '0007_drop_priority_score.sql',
+      '0008_action_duration.sql',
     ]);
     db.close();
   });
@@ -274,6 +275,29 @@ describe('0007_drop_priority_score migration', () => {
     };
     expect(role.title).toBe('Engineer');
     expect(role.salary_min).toBe(90000);
+
+    db.close();
+  });
+});
+
+describe('0008_action_duration migration', () => {
+  it('adds a nullable duration to both operational_logs and jobs', () => {
+    const db = openDb(dbPath);
+
+    for (const table of ['operational_logs', 'jobs']) {
+      const column = (db.pragma(`table_info(${table})`) as { name: string; notnull: number }[]).find(
+        (c) => c.name === 'duration_ms',
+      );
+      expect(column, `${table}.duration_ms`).toBeDefined();
+      // Nullable on purpose: a `started` record has not finished yet, and a
+      // pending job has not been claimed, so there is nothing to report.
+      expect(column!.notnull).toBe(0);
+    }
+
+    // The basis for a job's duration: `updated_at` cannot serve, since
+    // every retry, requeue and re-claim re-stamps it.
+    const claimedAt = (db.pragma('table_info(jobs)') as { name: string }[]).find((c) => c.name === 'claimed_at');
+    expect(claimedAt).toBeDefined();
 
     db.close();
   });

@@ -7,9 +7,33 @@ function printLog(log: ReturnType<typeof listOperationalLogs>[number]): void {
   const correlation = [log.job_id != null ? `job=#${log.job_id}` : '', log.entity_type ? `${log.entity_type}=#${log.entity_id}` : '']
     .filter(Boolean)
     .join(' ');
-  console.log(`${log.id}  ${log.occurred_at}  ${log.severity}/${log.outcome}  ${log.component}.${log.action}${correlation ? `  ${correlation}` : ''}`);
+  // Duration only appears on the record that finished the action; a
+  // `started` row has nothing to report yet.
+  const took = log.duration_ms != null ? `  ${formatDuration(log.duration_ms)}` : '';
+  console.log(
+    `${log.id}  ${log.occurred_at}  ${log.severity}/${log.outcome}  ${log.component}.${log.action}${took}${correlation ? `  ${correlation}` : ''}`,
+  );
   if (log.context) console.log(`  context: ${log.context}`);
   if (log.error) console.log(`  error: ${log.error}`);
+}
+
+/**
+ * Milliseconds up to a second, then seconds, then minutes — a command that
+ * took 4 minutes should not read as 243718ms.
+ *
+ * Rounding happens once, up front, and the carry is done on the rounded
+ * value: rounding inside each unit produced durations that cannot exist
+ * (59_999ms as "60.0s", 119_600ms as "1m60s") for anything landing in the
+ * last half-second of a minute.
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;
+
+  const totalSeconds = Math.round(ms / 1000);
+  return `${Math.floor(totalSeconds / 60)}m${totalSeconds % 60}s`;
 }
 
 export function registerLogsCommand(program: Command): void {

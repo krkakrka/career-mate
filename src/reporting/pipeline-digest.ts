@@ -32,6 +32,39 @@ export interface PipelineDigest {
   reapplyUpcoming: ReapplyRole[];
   /** What the model has actually cost, from the append-only call ledger. */
   modelSpend: { last7Days: ModelSpend; last30Days: ModelSpend };
+  /** The slowest recorded actions — where the waiting actually goes. */
+  slowestActions: SlowAction[];
+}
+
+export interface SlowAction {
+  component: string;
+  action: string;
+  durationMs: number;
+  occurredAt: string;
+}
+
+/**
+ * The slowest actions in the window.
+ *
+ * Deliberately raw rather than averaged: with a personal-scale volume of
+ * commands, the single 4-minute call is the thing worth seeing, and a mean
+ * would bury it under a hundred 30ms reads.
+ */
+function slowestActionsSince(db: Database.Database, sinceIso: string, limit = 5): SlowAction[] {
+  return (
+    db
+      .prepare(
+        `SELECT component, action, duration_ms, occurred_at FROM operational_logs
+         WHERE duration_ms IS NOT NULL AND occurred_at >= ?
+         ORDER BY duration_ms DESC LIMIT ?`,
+      )
+      .all(sinceIso, limit) as { component: string; action: string; duration_ms: number; occurred_at: string }[]
+  ).map((row) => ({
+    component: row.component,
+    action: row.action,
+    durationMs: row.duration_ms,
+    occurredAt: row.occurred_at,
+  }));
 }
 
 function isoDaysAgo(days: number): string {
@@ -106,5 +139,6 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
       last7Days: spendSince(db, isoDaysAgo(7)),
       last30Days: spendSince(db, isoDaysAgo(30)),
     },
+    slowestActions: slowestActionsSince(db, isoDaysAgo(7)),
   };
 }

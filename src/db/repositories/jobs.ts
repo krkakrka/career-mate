@@ -17,6 +17,14 @@ export interface JobRecord {
   error: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * How long *this attempt* took, claim to terminal state. Spans the model
+   * call and the fetch, not the queue wait or an earlier retry's backoff.
+   * Null while the job is pending or still running.
+   */
+  duration_ms: number | null;
+  /** When the current attempt was claimed; the basis for `duration_ms`. */
+  claimed_at: string | null;
 }
 
 export interface EnqueueJobParams {
@@ -81,6 +89,22 @@ export function enqueueJobOnce(db: Database.Database, params: EnqueueJobParams):
   return enqueueJob(db, params);
 }
 
+/**
+ * How long this attempt has been running, from its own `claimed_at`.
+ *
+ * The caller passes the `claimed_at` it saw when *it* claimed the job,
+ * rather than re-reading the row: under the stale-requeue race another
+ * worker may have re-claimed and re-stamped it in between, and reading the
+ * row would then attribute this worker's 35 minutes of work to the other
+ * worker's fresh claim — reporting roughly zero.
+ */
+function elapsedSinceClaim(claimedAt: string | null | undefined): number | null {
+  if (!claimedAt) return null;
+  const parsed = Date.parse(claimedAt);
+  if (Number.isNaN(parsed)) return null;
+  return Math.max(0, Date.now() - parsed);
+}
+
 /** Best-effort entity inference from a job's own payload, for log correlation — never throws on malformed payload. */
 function entityOf(job: JobRecord): ReturnType<typeof inferJobEntity> {
   try {
@@ -113,7 +137,10 @@ export function claimNextJob(db: Database.Database, topic: JobTopic): JobRecord 
     if (!candidate) return undefined;
 
     db.prepare(
-      "UPDATE jobs SET status = 'running', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+      `UPDATE jobs SET status = 'running',
+         claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
     ).run(candidate.id);
     return candidate.id;
   });
@@ -135,11 +162,12 @@ export function claimNextJob(db: Database.Database, topic: JobTopic): JobRecord 
   return job;
 }
 
-export function completeJob(db: Database.Database, id: number): void {
+export function completeJob(db: Database.Database, id: number, claimedAt?: string | null): void {
   const job = getJobById(db, id);
+  const durationMs = elapsedSinceClaim(claimedAt ?? job?.claimed_at);
   db.prepare(
-    "UPDATE jobs SET status = 'done', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-  ).run(id);
+    "UPDATE jobs SET status = 'done', duration_ms = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+  ).run(durationMs, id);
   const entity = job ? entityOf(job) : undefined;
   tryRecordOperationalLog(db, {
     outcome: 'succeeded',
@@ -148,12 +176,15 @@ export function completeJob(db: Database.Database, id: number): void {
     jobId: id,
     entityType: entity?.entityType,
     entityId: entity?.entityId,
+    durationMs,
   });
 }
 
 export interface FailJobOptions {
   maxAttempts?: number;
   backoffMs?: number;
+  /** The claim this worker saw, so a concurrent re-claim cannot skew the measurement. */
+  claimedAt?: string | null;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -173,17 +204,26 @@ export function failJob(
   const backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS;
   const attempts = job.attempts + 1;
   const sanitizedError = sanitizeOperationalError(errorMessage);
+  // A slow failure is the most interesting kind — a timeout looks exactly
+  // like a fast crash unless the duration is recorded.
+  const durationMs = elapsedSinceClaim(options.claimedAt ?? job.claimed_at);
 
   if (attempts >= maxAttempts) {
     db.prepare(
-      "UPDATE jobs SET status = 'failed', attempts = ?, error = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    ).run(attempts, sanitizedError, id);
+      "UPDATE jobs SET status = 'failed', attempts = ?, error = ?, duration_ms = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+    ).run(attempts, sanitizedError, durationMs, id);
   } else {
     const delayMs = backoffMs * 2 ** (attempts - 1);
     const availableAt = new Date(Date.now() + delayMs).toISOString();
+    // The attempt's duration is written on *every* terminal transition for
+    // that attempt, retry included — otherwise a job later killed by the
+    // stale sweep ends up `failed` with no duration at all, and the only
+    // record of how long it ran lives in operational_logs.
     db.prepare(
-      "UPDATE jobs SET status = 'pending', attempts = ?, error = ?, available_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    ).run(attempts, sanitizedError, availableAt, id);
+      `UPDATE jobs SET status = 'pending', attempts = ?, error = ?, available_at = ?, duration_ms = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
+    ).run(attempts, sanitizedError, availableAt, durationMs, id);
   }
 
   const updated = getJobById(db, id);
@@ -199,6 +239,7 @@ export function failJob(
     entityId: entity?.entityId,
     context: { topic: updated.topic, attempts: updated.attempts },
     error: errorMessage,
+    durationMs,
   });
   return updated;
 }
@@ -254,7 +295,7 @@ export function requeueStaleRunningJobs(
 
     const changed = db
       .prepare(
-        `UPDATE jobs SET status = ?, attempts = ?, error = ?,
+        `UPDATE jobs SET status = ?, attempts = ?, error = ?, claimed_at = NULL,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ? AND status = 'running'`,
       )

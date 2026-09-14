@@ -4,3 +4,19 @@ dist/
 *.log
 *.swp
 .DS_Store
+urls.txt
+learnings.txt
+issues.txt
+shortlist.md
+shortlist-raw-scan.txt
+applications.md
+career.md
+notes/
+questionnaire.md
+dossier.md
+cv/
+# Any PDF in this repo is a personal document (CVs, offer letters), never source.
+# `cv/` did not match the `CV 1.pdf` sitting in the root.
+*.pdf
+prompt.md
+packets/
