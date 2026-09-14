@@ -38,6 +38,14 @@ resolution ran.
 Every model-derived field needs a `kind` in `DERIVATION_KINDS`. If you add a field group without
 one, it can never be detected as stale and will never be recomputed.
 
+**Build a derivation key in exactly one place.** The handler writes it and the read path
+(`view-staleness.ts`) recomputes it to decide whether what is on screen is current. Two builders that
+drift by so much as a key order hash differently *every* time, so the value reads `(stale)` forever
+and every read enqueues a recompute that changes nothing. This shipped twice — once for the research
+context (hence `research-context.ts`), once for the prefill half added on top of it (hence
+`role-research-key.ts`). Add an input to a key by extending the shared builder, never inline at the
+call site.
+
 Spend is recorded separately, by `runTrackedExtraction`, **outside** any caller transaction and on
 the failure path too. A call that hits its budget cap and exits non-zero has still been paid for, and
 money already spent cannot be un-spent by a rollback.
@@ -97,6 +105,20 @@ reliable than a model reading the page.
 The same asymmetry governs the closure phrase list: a false *closed* verdict silently removes a live
 role from your pipeline, while a missed phrase costs one model call. Only add a phrase that cannot
 appear on a page whose posting is open.
+
+## A number is not a value without its unit
+
+`roles.salary_min`/`salary_max` are bare integers and `compFitTerm` compares `salary_max` to
+`preferences.minSalary` as bare integers. ¥5,000,000 clears a €100,000 floor by a factor of fifty
+while being about a third of it, and an hourly 80 stored as a salary reads as catastrophic — and
+nothing downstream reads the score back to notice either.
+
+So: a declared figure is only believed at `unitText: YEAR` and only in the currency
+`preferences.currency` names, and `salary_min`, `salary_max` and `salary_currency` are written and
+cleared **as a unit** — a call reporting any figure replaces all three, a call reporting none touches
+none. `COALESCE`ing them independently mixes sources: a model answering a minimum but no maximum left
+the *previous* declared maximum in place, and the maximum is the figure `compFitTerm` reads. Refuse
+rather than convert — a stored conversion rate is stale the day after it is written.
 
 ## Delivery process
 

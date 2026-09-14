@@ -25,6 +25,7 @@ const NO_PREFERENCES: Preferences = {
   seniority: null,
   remoteEuRequired: false,
   minSalary: null,
+  currency: null,
 };
 
 function baseRole(overrides: Record<string, unknown> = {}) {
@@ -39,6 +40,7 @@ function baseRole(overrides: Record<string, unknown> = {}) {
     reapply_after: null,
     salary_min: null,
     salary_max: null,
+    salary_currency: null,
     equity: null,
     remote_eu: null,
       closed_at: null,
@@ -105,6 +107,54 @@ describe('computePriorityScore — comp_fit', () => {
       preferences: { ...NO_PREFERENCES, minSalary: 200_000 },
     });
     expect(score).toBeCloseTo(0.5, 5);
+  });
+
+  it('is neutral when the role and the floor are in currencies known to differ', () => {
+    // These are bare integers: ¥5,000,000 clears a €100,000 floor by a
+    // factor of fifty while being about a third of it. Conversion is not in
+    // scope, so an incomparable pair scores the same as an unknown one.
+    const score = computePriorityScore({
+      role: baseRole({ salary_max: 5_000_000, salary_currency: 'JPY' }) as never,
+      company: null,
+      weights: { ...EQUAL_WEIGHTS, comp_fit: 1, remote_eu_match: 0, ai_proof: 0, wlb: 0, preference_match: 0, company_preference: 0 },
+      preferences: { ...NO_PREFERENCES, minSalary: 100_000, currency: 'EUR' },
+    });
+    expect(score).toBeCloseTo(0.5, 5);
+  });
+
+  it('compares normally when both sides agree on the currency', () => {
+    const score = computePriorityScore({
+      role: baseRole({ salary_max: 200_000, salary_currency: 'EUR' }) as never,
+      company: null,
+      weights: { ...EQUAL_WEIGHTS, comp_fit: 1, remote_eu_match: 0, ai_proof: 0, wlb: 0, preference_match: 0, company_preference: 0 },
+      preferences: { ...NO_PREFERENCES, minSalary: 150_000, currency: 'EUR' },
+    });
+    expect(score).toBeCloseTo(1, 5);
+  });
+
+  it('compares a role with no recorded currency exactly as before', () => {
+    // Every model-researched figure and every row predating the column is
+    // in this state; treating them as unknown would have flattened the comp
+    // term across the whole existing database.
+    const score = computePriorityScore({
+      role: baseRole({ salary_max: 200_000, salary_currency: null }) as never,
+      company: null,
+      weights: { ...EQUAL_WEIGHTS, comp_fit: 1, remote_eu_match: 0, ai_proof: 0, wlb: 0, preference_match: 0, company_preference: 0 },
+      preferences: { ...NO_PREFERENCES, minSalary: 150_000, currency: 'EUR' },
+    });
+    expect(score).toBeCloseTo(1, 5);
+  });
+
+  it('compares a currency-stamped role when no preference currency is set', () => {
+    // Unset means "unstated", not "different" — refusing here would make
+    // setting the column a regression for anyone who never configures one.
+    const score = computePriorityScore({
+      role: baseRole({ salary_max: 200_000, salary_currency: 'USD' }) as never,
+      company: null,
+      weights: { ...EQUAL_WEIGHTS, comp_fit: 1, remote_eu_match: 0, ai_proof: 0, wlb: 0, preference_match: 0, company_preference: 0 },
+      preferences: { ...NO_PREFERENCES, minSalary: 150_000 },
+    });
+    expect(score).toBeCloseTo(1, 5);
   });
 
   it('is neutral (0.5) when salary is unknown even if a floor is set', () => {

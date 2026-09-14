@@ -18,6 +18,7 @@ const NO_KEYWORDS: Preferences = {
   seniority: null,
   remoteEuRequired: false,
   minSalary: null,
+  currency: null,
 };
 
 const BACKEND_ONLY: Preferences = { ...NO_KEYWORDS, titleKeywords: ['backend'] };

@@ -15,9 +15,27 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-/** 1 if the role clears your salary floor, partial credit approaching it, 0.5 (neutral) if either side is unknown. */
+/**
+ * 1 if the role clears your salary floor, partial credit approaching it,
+ * 0.5 (neutral) if either side is unknown — or if the two are denominated
+ * in currencies we know to differ.
+ *
+ * That last case is not pedantry: these are bare integers, so ¥5,000,000
+ * clears a €100,000 floor by a factor of fifty while being about a third of
+ * it, and nothing downstream reads the score back to notice. Converting
+ * would need a rate that is stale the day after it is written, so a
+ * mismatch scores neutral — the same value every other unknown gets.
+ *
+ * A role with no recorded currency is compared as before. That covers every
+ * model-researched figure and every row predating the column; treating
+ * those as unknown instead would have silently flattened the comp term for
+ * the entire existing database.
+ */
 function compFitTerm(role: Role, preferences: Preferences): number {
   if (preferences.minSalary == null || role.salary_max == null) return 0.5;
+  if (role.salary_currency != null && preferences.currency != null && role.salary_currency !== preferences.currency) {
+    return 0.5;
+  }
   if (role.salary_max >= preferences.minSalary) return 1;
   return Math.max(0, role.salary_max / preferences.minSalary);
 }

@@ -16,6 +16,18 @@ export interface Preferences {
   seniority: string | null;
   remoteEuRequired: boolean;
   minSalary: number | null;
+  /**
+   * The ISO currency code `minSalary` is denominated in, uppercased, or
+   * null when you have not said.
+   *
+   * Null is the honest default rather than a guess: nothing in the tool can
+   * infer it, and getting it wrong is worse than not knowing. It gates the
+   * JSON-LD `baseSalary` prefill — a declared figure is only believed when
+   * its currency matches this, since `compFitTerm` compares bare integers
+   * and a JPY figure clears a EUR floor numerically while being a fraction
+   * of it in fact.
+   */
+  currency: string | null;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -23,6 +35,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   seniority: null,
   remoteEuRequired: false,
   minSalary: null,
+  currency: null,
 };
 
 function preferencesConfigPath(): string {
@@ -44,5 +57,8 @@ export function loadPreferences(): Preferences {
     seniority: nullableStringOr(preferences.seniority, DEFAULT_PREFERENCES.seniority),
     remoteEuRequired: booleanOr(preferences.remoteEuRequired, DEFAULT_PREFERENCES.remoteEuRequired),
     minSalary: nullableNumberOr(preferences.minSalary, DEFAULT_PREFERENCES.minSalary),
+    // Uppercased on read so `"eur"` in a hand-edited file matches a
+    // declared `EUR` — the comparison is exact everywhere downstream.
+    currency: nullableStringOr(preferences.currency, DEFAULT_PREFERENCES.currency)?.trim().toUpperCase() || null,
   };
 }

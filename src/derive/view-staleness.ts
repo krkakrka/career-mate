@@ -13,7 +13,8 @@ import {
   roleStructuralPayload,
 } from '../domain/enrichment-payload.js';
 import type { EntityType } from '../domain/entity-type.js';
-import { buildCompanyResearchContext, buildRoleResearchContext } from '../enrichment/research-context.js';
+import { buildCompanyResearchContext } from '../enrichment/research-context.js';
+import { roleResearchSourceKey } from './role-research-key.js';
 import { hashUrl } from '../pages/store.js';
 import { contextKey, type DerivationKey } from './keys.js';
 import { researchRecipeVersion, structuralRecipeVersion } from './recipes.js';
@@ -114,8 +115,11 @@ export function roleFieldGroupStatus(
 ): FieldGroupStatus[] {
   return [
     statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url, recipes.roleStructural)),
+    // Must be the *same* key the handler writes — context plus prefill.
+    // Hashing the context alone here made every researched field read
+    // `(stale)` forever and queued a recompute on every read.
     statusFor(db, 'role', role.id, 'role_research', {
-      sourceKey: contextKey(buildRoleResearchContext(db, role)),
+      sourceKey: roleResearchSourceKey(db, role),
       recipeVersion: recipes.roleResearch,
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);

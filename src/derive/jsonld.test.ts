@@ -28,6 +28,7 @@ describe('findJobPostingLd', () => {
       companyUrl: 'https://cohere.com/',
       jobLocationType: null,
       applicantCountries: [],
+      baseSalary: null,
     });
   });
 
@@ -94,6 +95,7 @@ describe('findJobPostingLd', () => {
       companyUrl: null,
       jobLocationType: null,
       applicantCountries: [],
+      baseSalary: null,
     });
   });
 
@@ -111,6 +113,7 @@ describe('findJobPostingLd', () => {
       companyUrl: null,
       jobLocationType: null,
       applicantCountries: [],
+      baseSalary: null,
     });
   });
 
@@ -142,6 +145,7 @@ describe('findJobPostingLd', () => {
       companyUrl: null,
       jobLocationType: null,
       applicantCountries: [],
+      baseSalary: null,
     });
   });
 
@@ -215,5 +219,70 @@ describe('findJobPostingLd', () => {
     const html = page(ashby);
     expect(findJobPostingLd(html)?.title).toBe(findJobPostingLd(html)?.title);
     expect(findJobPostingLd(html)).not.toBeNull();
+  });
+});
+
+describe('findJobPostingLd baseSalary', () => {
+  const salary = (baseSalary: unknown) => findJobPostingLd(page(JSON.stringify({ '@type': 'JobPosting', baseSalary })))?.baseSalary;
+
+  it('reads the MonetaryAmount shape measured on a live Ashby posting', () => {
+    expect(
+      salary({
+        '@type': 'MonetaryAmount',
+        currency: 'USD',
+        value: { '@type': 'QuantitativeValue', minValue: 211400, maxValue: 290600, unitText: 'YEAR' },
+      }),
+    ).toEqual({ currency: 'USD', unitText: 'YEAR', min: 211400, max: 290600 });
+  });
+
+  it('reads a bare numeric value as an exact figure', () => {
+    expect(salary({ currency: 'EUR', unitText: 'YEAR', value: 120000 })).toEqual({
+      currency: 'EUR',
+      unitText: 'YEAR',
+      min: 120000,
+      max: 120000,
+    });
+  });
+
+  it('prefers unitText on the value but falls back to the amount', () => {
+    // schema.org's own examples put it on the QuantitativeValue; publishers
+    // put it in both places.
+    expect(salary({ currency: 'EUR', unitText: 'MONTH', value: { minValue: 1, maxValue: 2, unitText: 'YEAR' } })?.unitText).toBe('YEAR');
+    expect(salary({ currency: 'EUR', unitText: 'YEAR', value: { minValue: 1, maxValue: 2 } })?.unitText).toBe('YEAR');
+  });
+
+  it('uppercases currency and unit so a lower-cased declaration still matches', () => {
+    expect(salary({ currency: 'usd', value: { value: 1, unitText: 'year' } })).toMatchObject({ currency: 'USD', unitText: 'YEAR' });
+  });
+
+  it('orders a range declared backwards', () => {
+    expect(salary({ currency: 'EUR', value: { minValue: 200, maxValue: 100, unitText: 'YEAR' } })).toMatchObject({ min: 100, max: 200 });
+  });
+
+  it('returns null when only one end of the range is declared', () => {
+    // All-or-nothing: the consumer writes min, max and currency as a unit,
+    // so half a declaration would be stamped with a currency describing
+    // only half the row.
+    expect(salary({ currency: 'EUR', value: { minValue: 90000, unitText: 'YEAR' } })).toBeNull();
+  });
+
+  it('rejects non-numeric, zero and negative figures', () => {
+    expect(salary({ currency: 'EUR', value: { minValue: '90000', maxValue: '110000', unitText: 'YEAR' } })).toBeNull();
+    expect(salary({ currency: 'EUR', value: { minValue: 0, maxValue: 0, unitText: 'YEAR' } })).toBeNull();
+    expect(salary({ currency: 'EUR', value: { minValue: -1, maxValue: -1, unitText: 'YEAR' } })).toBeNull();
+  });
+
+  it('carries a missing currency or unit through as null rather than guessing', () => {
+    // The judgement about what is usable belongs to the prefill rule, which
+    // is the only place that knows what your floor is denominated in.
+    expect(salary({ value: { minValue: 1, maxValue: 2 } })).toEqual({ currency: null, unitText: null, min: 1, max: 2 });
+  });
+
+  it('unwraps baseSalary given as an array', () => {
+    expect(salary([{ currency: 'EUR', value: { value: 5, unitText: 'YEAR' } }])).toMatchObject({ currency: 'EUR', min: 5 });
+  });
+
+  it('is null when the posting declares no pay', () => {
+    expect(findJobPostingLd(page(ashby))?.baseSalary).toBeNull();
   });
 });

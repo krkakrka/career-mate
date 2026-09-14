@@ -7,6 +7,7 @@ const NO_KEYWORDS: Preferences = {
   seniority: null,
   remoteEuRequired: false,
   minSalary: null,
+  currency: null,
 };
 
 const BACKEND_KEYWORDS: Preferences = {

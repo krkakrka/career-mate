@@ -7,13 +7,15 @@ import { restoreEnv } from '../../test/helpers/env.js';
 import { startFixtureServer, type FixtureServer } from '../../test/helpers/fixture-server.js';
 import { openDb } from '../db/client.js';
 import { createCompany } from '../db/repositories/companies.js';
+import { createRole, getRoleById } from '../db/repositories/roles.js';
 import { upsertDerivation } from '../db/repositories/derivations.js';
 import { listJobs } from '../db/repositories/jobs.js';
 import { snapshotPage } from '../pages/store.js';
-import { structuralRecipeVersion } from './recipes.js';
+import { researchRecipeVersion, structuralRecipeVersion } from './recipes.js';
+import { roleResearchSourceKey } from './role-research-key.js';
 import type { StalenessReason } from './staleness.js';
 import type { FieldGroupStatus } from './view-staleness.js';
-import { companyFieldGroupStatus, enqueueRecomputes } from './view-staleness.js';
+import { companyFieldGroupStatus, enqueueRecomputes, roleFieldGroupStatus } from './view-staleness.js';
 
 let tempDir: string;
 let originalDataDir: string | undefined;
@@ -143,5 +145,43 @@ describe('the recompute floor', () => {
     // that it takes effect — rate-limiting it meant nothing happened for an
     // hour, with no indication why.
     expect(enqueueRecomputes(db, 'company', company.id, group('recipe-changed'), floorMs)).toBe(1);
+  });
+});
+
+describe('roleFieldGroupStatus — role_research', () => {
+  it('reports a just-researched role as fresh rather than stale forever', async () => {
+    // The handler keys `role_research` on the context *and the prefill*;
+    // the read path used to key it on the context alone. Two different
+    // strings hash differently every time, so `cm roles show` suffixed
+    // Salary/Equity/Remote-EU with `(stale)` on every read and
+    // `enqueueRecomputes` queued a job that then did nothing — exactly the
+    // failure research-context.ts's header warns about.
+    server = await startFixtureServer({
+      '/jobs/1': '<html><body><h1>Staff Engineer</h1><p>We build things.</p></body></html>',
+    });
+    const role = createRole(db, { url: `${server.url}/jobs/1` });
+    await snapshotPage(db, role.url, { kind: 'role' });
+
+    const fresh = getRoleById(db, role.id)!;
+    upsertDerivation(db, {
+      entityType: 'role',
+      entityId: role.id,
+      kind: 'role_research',
+      sourceKey: roleResearchSourceKey(db, fresh),
+      recipeVersion: researchRecipeVersion('role'),
+      model: 'fake',
+      costUsd: 0,
+      inputTokens: null,
+      outputTokens: null,
+    });
+
+    const research = roleFieldGroupStatus(db, fresh).find((group) => group.kind === 'role_research');
+    expect(research?.marker).toBeUndefined();
+
+    // `role_structural` is legitimately pending here, so scope the claim:
+    // nothing should ask to *re-research* a role nothing has changed.
+    enqueueRecomputes(db, 'role', role.id, roleFieldGroupStatus(db, fresh));
+    const kinds = listJobs(db, {}).map((job) => (JSON.parse(job.payload) as { kind: string }).kind);
+    expect(kinds).not.toContain('role-research');
   });
 });

@@ -50,7 +50,11 @@ function printRoleDetail(role: Role, markers: Map<string, string>, score: number
   console.log(`URL: ${role.url}`);
   console.log(`Status: ${role.status} (since ${role.status_changed_at})`);
   console.log(`Reapply after: ${role.reapply_after ?? '(none)'}`);
-  console.log(`Salary: ${role.salary_min ?? '?'} - ${role.salary_max ?? '?'}${research}`);
+  // The currency is printed only when recorded: model-researched figures
+  // carry none, and appending a guess would make an unlabelled number look
+  // labelled.
+  const currency = role.salary_currency ? ` ${role.salary_currency}` : '';
+  console.log(`Salary: ${role.salary_min ?? '?'} - ${role.salary_max ?? '?'}${currency}${research}`);
   console.log(`Equity: ${role.equity ?? '(unknown)'}${research}`);
   console.log(`Remote/EU: ${role.remote_eu ?? '(unknown)'}${research}`);
   console.log(`Priority score: ${score.toFixed(2)}`);

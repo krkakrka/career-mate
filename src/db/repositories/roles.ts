@@ -15,6 +15,8 @@ export interface Role {
   reapply_after: string | null;
   salary_min: number | null;
   salary_max: number | null;
+  /** ISO code the two figures above are in, or null when unrecorded (every model-researched figure). */
+  salary_currency: string | null;
   equity: string | null;
   remote_eu: 'yes' | 'no' | 'unknown' | null;
   closed_at: string | null;
@@ -281,6 +283,8 @@ export function setReapplyAfter(db: Database.Database, id: number, isoDate: stri
 export interface UpdateRoleResearchFieldsParams {
   salaryMin?: number | null;
   salaryMax?: number | null;
+  /** The currency the figures in *this* call are in; null for model-researched ones, which carry none. */
+  salaryCurrency?: string | null;
   equity?: string | null;
   remoteEu?: 'yes' | 'no' | 'unknown' | null;
 }
@@ -292,14 +296,36 @@ export function updateResearchFields(
   fields: UpdateRoleResearchFieldsParams,
 ): Role {
   requireRole(db, roleId);
+  // All three salary columns move together or not at all.
+  //
+  // COALESCEing them independently mixed sources: a role prefilled at EUR
+  // 90000-110000 whose declaration is later withdrawn, then re-researched
+  // by a model that answers a minimum but no maximum, kept the old declared
+  // *maximum* beside the new model minimum — and `compFitTerm` reads the
+  // maximum. One partial answer is not a reason to keep half of a different
+  // answer, so a call that reports any figure replaces all three, and a call
+  // that reports none leaves all three alone.
+  const salaryMin = fields.salaryMin ?? null;
+  const salaryMax = fields.salaryMax ?? null;
+  const wroteSalary = salaryMin !== null || salaryMax !== null;
   db.prepare(
     `UPDATE roles
-     SET salary_min = COALESCE(?, salary_min), salary_max = COALESCE(?, salary_max),
-         equity = COALESCE(?, equity), remote_eu = COALESCE(?, remote_eu),
+     SET salary_min = CASE WHEN :wroteSalary THEN :salaryMin ELSE salary_min END,
+         salary_max = CASE WHEN :wroteSalary THEN :salaryMax ELSE salary_max END,
+         salary_currency = CASE WHEN :wroteSalary THEN :salaryCurrency ELSE salary_currency END,
+         equity = COALESCE(:equity, equity), remote_eu = COALESCE(:remoteEu, remote_eu),
          last_enriched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE id = ?`,
-  ).run(fields.salaryMin ?? null, fields.salaryMax ?? null, fields.equity ?? null, fields.remoteEu ?? null, roleId);
+     WHERE id = :roleId`,
+  ).run({
+    salaryMin,
+    salaryMax,
+    wroteSalary: wroteSalary ? 1 : 0,
+    salaryCurrency: fields.salaryCurrency ?? null,
+    equity: fields.equity ?? null,
+    remoteEu: fields.remoteEu ?? null,
+    roleId,
+  });
   return requireRole(db, roleId);
 }
 

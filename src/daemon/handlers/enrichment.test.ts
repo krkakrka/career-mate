@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../../db/client.js';
 import { createCompany, getCompanyById, listCompanies } from '../../db/repositories/companies.js';
 import { listEventsForEntity } from '../../db/repositories/events.js';
+import { listOperationalLogs } from '../../db/repositories/operational-logs.js';
 import type { JobRecord } from '../../db/repositories/jobs.js';
-import { createRole, getRoleById } from '../../db/repositories/roles.js';
+import { createRole, getRoleById, updateResearchFields } from '../../db/repositories/roles.js';
 import { handleEnrichmentJob, resolveRoleCompany } from './enrichment.js';
 import { restoreEnv } from '../../../test/helpers/env.js';
 import { startFixtureServer } from '../../../test/helpers/fixture-server.js';
@@ -49,6 +50,12 @@ afterEach(() => {
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
+
+/** Which fields the last completed research pass actually sent to the model. */
+function researchModelFields(roleId: number): string[] {
+  const events = listEventsForEntity(db, 'role', roleId).filter((e) => e.type === 'role.research_completed');
+  return (JSON.parse(events.at(-1)!.context!) as { modelFields: string[] }).modelFields;
+}
 
 describe('resolveRoleCompany', () => {
   it('creates and attaches a new company when companyUrl is a valid http(s) URL', () => {
@@ -255,11 +262,6 @@ describe('role research prefill (JSON-LD location)', () => {
     return `<html><head><script type="application/ld+json">${ld}</script></head><body><h1>Engineer</h1></body></html>`;
   }
 
-  function researchModelFields(roleId: number): string[] {
-    const event = listEventsForEntity(db, 'role', roleId).find((e) => e.type === 'role.research_completed');
-    return (JSON.parse(event!.context!) as { modelFields: string[] }).modelFields;
-  }
-
   it('prefers the posting\'s own declaration over the model, and does not pay to ask', async () => {
     // The fake records the argv it was handed, so "the model was not asked"
     // can be asserted against the real invocation rather than against our
@@ -286,12 +288,13 @@ describe('role research prefill (JSON-LD location)', () => {
       expect(researchModelFields(role.id)).toEqual(['salaryMin', 'salaryMax', 'equity']);
 
       // The prompt that actually went out asked for three fields, not four.
-      const research = fs
+      const schema = fs
         .readFileSync(callLog, 'utf-8')
         .split('\n')
-        .find((line) => line.includes('salaryMin'));
-      expect(research).toBeDefined();
-      expect(research).not.toContain('remoteEu');
+        .find((line) => line.includes('matching this shape exactly'));
+      expect(schema).toBeDefined();
+      expect(schema).toContain('"salaryMin"');
+      expect(schema).not.toContain('remoteEu');
     } finally {
       delete process.env.CM_FAKE_CLAUDE_LOG;
       await server.close();
@@ -340,6 +343,260 @@ describe('role research prefill (JSON-LD location)', () => {
       // Falls back to the model's answer, and remoteEu is back in the ask.
       expect(getRoleById(db, role.id)!.remote_eu).toBe('yes');
       expect(researchModelFields(role.id)).toContain('remoteEu');
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+});
+
+describe('role research prefill (JSON-LD baseSalary)', () => {
+  /** Writes the preference profile the prefill gate reads. */
+  function setCurrency(currency: string | null): void {
+    const dir = path.join(tempDir, 'config');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'preferences.json'),
+      JSON.stringify({ titleKeywords: [], seniority: null, remoteEuRequired: false, minSalary: null, currency }),
+    );
+  }
+
+  /** The `baseSalary` shape measured on a live Ashby/ramp posting. */
+  function salaryPage(baseSalary: unknown): string {
+    const ld = JSON.stringify({
+      '@context': 'https://schema.org/',
+      '@type': 'JobPosting',
+      title: 'Staff Platform Engineer',
+      hiringOrganization: { '@type': 'Organization', name: 'Initech', sameAs: 'https://initech.example.com' },
+      baseSalary,
+    });
+    return `<html><head><script type="application/ld+json">${ld}</script></head><body><h1>Engineer</h1></body></html>`;
+  }
+
+  const annual = (currency: string) => ({
+    '@type': 'MonetaryAmount',
+    currency,
+    value: { '@type': 'QuantitativeValue', minValue: 211400, maxValue: 290600, unitText: 'YEAR' },
+  });
+
+  it('stores the declared range with its currency and does not pay to ask', async () => {
+    // Asserted against the argv the fake actually received, not against the
+    // event we write ourselves — reverting the subsetting must fail this.
+    const callLog = path.join(tempDir, 'calls.log');
+    process.env.CM_FAKE_CLAUDE_LOG = callLog;
+    setCurrency('USD');
+
+    const server = await startFixtureServer({ '/jobs/pay': salaryPage(annual('USD')) });
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/pay` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      // The fake answers 90000/120000 for every posting, so these figures
+      // can only have come from the declaration.
+      expect(getRoleById(db, role.id)).toMatchObject({
+        salary_min: 211400,
+        salary_max: 290600,
+        salary_currency: 'USD',
+      });
+      expect(researchModelFields(role.id)).toEqual(['equity', 'remoteEu']);
+
+      // The *schema* line, not any line mentioning a field name.
+      // `sources.json`'s instructions open with "Research compensation (base
+      // salary min/max, equity)…", so searching for `equity` finds that
+      // instead and the assertions below pass whether or not the call was
+      // subsetted at all.
+      const schema = fs
+        .readFileSync(callLog, 'utf-8')
+        .split('\n')
+        .find((line) => line.includes('matching this shape exactly'));
+      expect(schema).toBeDefined();
+      expect(schema).toContain('"equity"');
+      expect(schema).toContain('"remoteEu"');
+      expect(schema).not.toContain('salaryMin');
+      expect(schema).not.toContain('salaryMax');
+    } finally {
+      delete process.env.CM_FAKE_CLAUDE_LOG;
+      await server.close();
+    }
+  }, 60_000);
+
+  it('ignores a declaration in another currency, logs why, and asks the model', async () => {
+    setCurrency('EUR');
+    const server = await startFixtureServer({ '/jobs/jpy': salaryPage(annual('JPY')) });
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/jpy` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      // The fake's answer, and no currency stamped on it — the figures are
+      // in whatever currency the model found, which it never reports.
+      expect(getRoleById(db, role.id)).toMatchObject({
+        salary_min: 90000,
+        salary_max: 120000,
+        salary_currency: null,
+      });
+      expect(researchModelFields(role.id)).toContain('salaryMin');
+
+      const logged = listOperationalLogs(db, { action: 'salary-declaration-ignored' });
+      expect(logged.length).toBe(1);
+      expect(JSON.parse(logged[0]!.context!).reason).toBe('declared JPY, but preferences.currency is EUR');
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+
+  it('never leaves half an old range beside half a new one', async () => {
+    // A declared EUR range, then a withdrawn declaration and a model that
+    // answers a minimum but no maximum. COALESCEing the columns separately
+    // kept the old declared maximum — the figure `compFitTerm` actually
+    // reads — beside the new model minimum, with the currency cleared.
+    setCurrency('EUR');
+    const role = createRole(db, { url: 'https://example.com/jobs/partial' });
+    updateResearchFields(db, role.id, { salaryMin: 90_000, salaryMax: 110_000, salaryCurrency: 'EUR' });
+
+    updateResearchFields(db, role.id, { salaryMin: 95_000, salaryMax: null, salaryCurrency: null });
+
+    expect(getRoleById(db, role.id)).toMatchObject({
+      salary_min: 95_000,
+      salary_max: null,
+      salary_currency: null,
+    });
+  });
+
+  it('leaves the stored range alone when a pass reports no figures at all', async () => {
+    setCurrency('EUR');
+    const role = createRole(db, { url: 'https://example.com/jobs/silent' });
+    updateResearchFields(db, role.id, { salaryMin: 90_000, salaryMax: 110_000, salaryCurrency: 'EUR' });
+
+    updateResearchFields(db, role.id, { salaryMin: null, salaryMax: null, salaryCurrency: null, equity: '0.1%' });
+
+    expect(getRoleById(db, role.id)).toMatchObject({
+      salary_min: 90_000,
+      salary_max: 110_000,
+      salary_currency: 'EUR',
+      equity: '0.1%',
+    });
+  });
+
+  it('surfaces a declaration the posting adds after it was already researched', async () => {
+    // The case that made logging after the freshness skip useless: a
+    // JSON-LD-only edit changes no text_hash and no prefill field (the
+    // declaration is declined either way), so the derivation skips — and
+    // the one-line config fix would never be mentioned for exactly the
+    // posting where it would start paying off.
+    setCurrency(null);
+    let declared = false;
+    const server = await startFixtureServer({
+      '/jobs/late': () => (declared ? salaryPage(annual('USD')) : salaryPage(undefined)),
+    });
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/late` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+      expect(listOperationalLogs(db, { action: 'salary-declaration-ignored' }).length).toBe(0);
+
+      declared = true;
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id, force: true }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      const logged = listOperationalLogs(db, { action: 'salary-declaration-ignored' });
+      expect(logged.length).toBe(1);
+      expect(JSON.parse(logged[0]!.context!).reason).toBe(
+        'declared USD; set preferences.currency to accept declared pay',
+      );
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+
+  it('reports a different reason once the first one is fixed', async () => {
+    // The reason is part of the log's identity, so moving from "unset" to
+    // "set to the wrong one" is still reported rather than deduped away.
+    setCurrency(null);
+    const server = await startFixtureServer({ '/jobs/reason': salaryPage(annual('USD')) });
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/reason` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      setCurrency('EUR');
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      const reasons = listOperationalLogs(db, { action: 'salary-declaration-ignored' })
+        .map((log) => JSON.parse(log.context!).reason as string)
+        .sort();
+      expect(reasons).toEqual([
+        'declared USD, but preferences.currency is EUR',
+        'declared USD; set preferences.currency to accept declared pay',
+      ]);
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+
+  it('does not log the same unusable declaration on every later refresh', async () => {
+    // `cm refresh` re-enqueues research for every role it touches. Logging
+    // before the freshness check wrote one of these per role per refresh,
+    // forever, for a posting nothing had re-derived.
+    setCurrency('EUR');
+    const server = await startFixtureServer({ '/jobs/repeat': salaryPage(annual('JPY')) });
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/repeat` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      expect(listOperationalLogs(db, { action: 'salary-declaration-ignored' }).length).toBe(1);
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+
+  it('says what to configure when a declaration arrives with no preference currency set', async () => {
+    // The shipped default. The declaration is unusable, but the reason is a
+    // one-line config fix, and paying for the search instead would never
+    // say so.
+    setCurrency(null);
+    const server = await startFixtureServer({ '/jobs/unset': salaryPage(annual('USD')) });
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/unset` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      expect(getRoleById(db, role.id)!.salary_min).toBe(90000); // the fake's answer
+      const logged = listOperationalLogs(db, { action: 'salary-declaration-ignored' });
+      expect(JSON.parse(logged[0]!.context!).reason).toBe(
+        'declared USD; set preferences.currency to accept declared pay',
+      );
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+
+  it('clears a stale currency when later figures come from the model', async () => {
+    // A role prefilled as USD, then re-researched after the declaration is
+    // withdrawn. The currency must not outlive the figures it described.
+    setCurrency('USD');
+    let declared = true;
+    const server = await startFixtureServer({
+      '/jobs/withdrawn': () => (declared ? salaryPage(annual('USD')) : salaryPage(undefined)),
+    });
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/withdrawn` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+      expect(getRoleById(db, role.id)!.salary_currency).toBe('USD');
+
+      declared = false;
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id, force: true }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      expect(getRoleById(db, role.id)).toMatchObject({
+        salary_min: 90000,
+        salary_max: 120000,
+        salary_currency: null,
+      });
     } finally {
       await server.close();
     }

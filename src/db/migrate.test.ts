@@ -145,6 +145,7 @@ describe('0002_nullable_role_company migration', () => {
       '0006_model_calls.sql',
       '0007_drop_priority_score.sql',
       '0008_action_duration.sql',
+      '0009_role_salary_currency.sql',
     ]);
     db.close();
   });
@@ -298,6 +299,36 @@ describe('0008_action_duration migration', () => {
     // every retry, requeue and re-claim re-stamps it.
     const claimedAt = (db.pragma('table_info(jobs)') as { name: string }[]).find((c) => c.name === 'claimed_at');
     expect(claimedAt).toBeDefined();
+
+    db.close();
+  });
+});
+
+describe('0009_role_salary_currency migration', () => {
+  it('adds a nullable currency that leaves existing figures untouched', () => {
+    const db = openDb(dbPath);
+    db.prepare('INSERT INTO roles (url, title, salary_min, salary_max) VALUES (?, ?, ?, ?)').run(
+      'https://example.com/jobs/legacy',
+      'Engineer',
+      90000,
+      110000,
+    );
+
+    const column = (db.pragma('table_info(roles)') as { name: string; notnull: number }[]).find(
+      (c) => c.name === 'salary_currency',
+    );
+    expect(column).toBeDefined();
+    // Nullable, and null for every existing row: model-researched figures
+    // carry no currency, and back-filling a guess would invent data that
+    // `compFitTerm` then trusts.
+    expect(column!.notnull).toBe(0);
+
+    const role = db.prepare('SELECT * FROM roles WHERE url = ?').get('https://example.com/jobs/legacy') as {
+      salary_min: number;
+      salary_max: number;
+      salary_currency: string | null;
+    };
+    expect(role).toMatchObject({ salary_min: 90000, salary_max: 110000, salary_currency: null });
 
     db.close();
   });

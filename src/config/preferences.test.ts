@@ -32,7 +32,26 @@ describe('loadPreferences', () => {
       seniority: null,
       remoteEuRequired: false,
       minSalary: null,
+      // Null rather than a guess: nothing can infer what your floor is
+      // denominated in, and a wrong guess silently corrupts the comp term.
+      currency: null,
     });
+  });
+
+  it('uppercases and trims a hand-written currency so it matches a declaration', () => {
+    const configDir = path.join(tempDir, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'preferences.json'), JSON.stringify({ currency: ' eur ' }));
+    expect(loadPreferences().currency).toBe('EUR');
+  });
+
+  it('treats a blank or non-string currency as unset rather than as a code', () => {
+    const configDir = path.join(tempDir, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    for (const currency of ['', '   ', 42, [], {}]) {
+      fs.writeFileSync(path.join(configDir, 'preferences.json'), JSON.stringify({ currency }));
+      expect(loadPreferences().currency, JSON.stringify(currency)).toBeNull();
+    }
   });
 
   it('reads back a user-edited value instead of overwriting it', () => {

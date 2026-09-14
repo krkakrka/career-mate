@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { fetchAuthenticatedPage } from '../../browser/profile.js';
+import { loadPreferences } from '../../config/preferences.js';
 import {
   findOrCreateCompanyByUrl,
   getCompanyById,
@@ -8,6 +9,7 @@ import {
   updateStructuralFields as updateCompanyStructuralFields,
 } from '../../db/repositories/companies.js';
 import { recordEvent } from '../../db/repositories/events.js';
+import { listOperationalLogs, tryRecordOperationalLog } from '../../db/repositories/operational-logs.js';
 import { enqueueJob, enqueueJobOnce, type JobRecord } from '../../db/repositories/jobs.js';
 import {
   attachCompanyIfUnresolved,
@@ -18,12 +20,13 @@ import {
 import { contextKey, recipeVersion, sha256 } from '../../derive/keys.js';
 import { researchRecipeVersion, structuralRecipeVersion } from '../../derive/recipes.js';
 import { recordDerivation, skipIfFresh } from '../../derive/record.js';
+import { readRoleResearchPrefill, roleResearchSourceKey } from '../../derive/role-research-key.js';
 import {
   COMPANY_STRUCTURAL_FIELDS,
   missingFields,
   prefillCompanyStructural,
   prefillRoleStructural,
-  prefillRoleResearch,
+  roleResearchPrefillFields,
   ROLE_RESEARCH_FIELDS,
   ROLE_STRUCTURAL_FIELDS,
 } from '../../derive/structural.js';
@@ -372,22 +375,44 @@ function normalizeRemoteEu(value: string | null | undefined): 'yes' | 'no' | 'un
 // exists, but building it against a hypothetical is premature — nothing
 // supplies one yet.
 /**
- * The posting's own declaration, from the snapshot the structural pass took.
+ * Says once, per role and per reason, that a declared `baseSalary` was not
+ * believed.
  *
- * Every failure degrades to "declared nothing" rather than throwing: the
- * snapshot row can outlive its file (a hand-cleared `.data/pages`, which
- * `snapshotPage` guards for exactly this reason), and this runs *before*
- * `skipIfFresh` — so an exception here would permanently fail research for
- * that role through every retry, including roles already fully researched.
+ * Worth saying at all because the common reason is `preferences.currency`
+ * being unset — a one-line fix that makes two of the four research fields
+ * free, and paying for the search instead would never tell you that.
+ *
+ * Deduped rather than rate-limited: `cm refresh` re-enqueues research for
+ * every role it touches, so an undeduped log wrote one of these per role
+ * per refresh, forever, for a posting nothing had re-derived. The reason is
+ * part of the identity, so changing `preferences.currency` from unset to
+ * the wrong one still reports the new problem.
  */
-function readRoleResearchPrefill(db: Database.Database, url: string): { remoteEu: 'yes' | 'no' | null } {
-  try {
-    const snapshot = getLatestSuccessfulSnapshot(db, hashUrl(url));
-    if (!snapshot?.html_path) return { remoteEu: null };
-    return prefillRoleResearch(readSnapshotHtml(snapshot));
-  } catch {
-    return { remoteEu: null };
-  }
+function logDeclinedSalaryOnce(db: Database.Database, roleId: number, jobId: number, reason: string): void {
+  const alreadySaid = listOperationalLogs(db, {
+    component: 'enrichment',
+    action: 'salary-declaration-ignored',
+    entityType: 'role',
+    entityId: roleId,
+  }).some((log) => {
+    try {
+      return (JSON.parse(log.context ?? '{}') as { reason?: string }).reason === reason;
+    } catch {
+      return false;
+    }
+  });
+  if (alreadySaid) return;
+
+  tryRecordOperationalLog(db, {
+    severity: 'info',
+    outcome: 'skipped',
+    component: 'enrichment',
+    action: 'salary-declaration-ignored',
+    entityType: 'role',
+    entityId: roleId,
+    jobId,
+    context: { reason },
+  });
 }
 
 async function handleRoleResearch(db: Database.Database, roleId: number, jobId: number): Promise<void> {
@@ -398,41 +423,66 @@ async function handleRoleResearch(db: Database.Database, roleId: number, jobId: 
   const context = buildRoleResearchContext(db, role);
 
   // What the posting declares about itself, from the snapshot the
-  // structural pass already took — a publisher's own
-  // `applicantLocationRequirements` beats a web search's inference, and
-  // costs nothing.
+  // structural pass already took. A publisher's own
+  // `applicantLocationRequirements` and `baseSalary` beat a web search's
+  // inference, and cost nothing.
   const prefill = readRoleResearchPrefill(db, role.url);
-  const wanted = missingFields(ROLE_RESEARCH_FIELDS, prefill);
+  const wanted = missingFields(ROLE_RESEARCH_FIELDS, roleResearchPrefillFields(prefill));
 
-  // The key covers the context *and the prefill*. Keying on the context
-  // alone would mean a posting that later corrects its
-  // `applicantLocationRequirements` is never picked up: `deriveText` strips
-  // `<script>`, so a JSON-LD-only edit changes neither `text_hash` nor the
-  // context, and both derivations would skip forever. Keying on the prefill
-  // *result* rather than the raw HTML is what keeps a changed analytics
-  // snippet from churning everything.
+  // Built by the shared helper, never inline: `roleFieldGroupStatus` hashes
+  // the same thing on the read path, and when the two disagreed every
+  // researched field read `(stale)` forever.
   const key = {
-    sourceKey: contextKey(`${context}\n${JSON.stringify(prefill)}`),
+    sourceKey: roleResearchSourceKey(db, role, prefill),
     recipeVersion: researchRecipeVersion('role'),
   };
+  // Logged *before* the freshness skip, and deduped instead.
+  //
+  // After the skip would have been quieter but useless where it matters
+  // most: `deriveText` strips `<script>`, so a posting that *adds* a
+  // declaration changes neither the context nor the prefill fields (both
+  // null either way, since the declaration is declined), the key is
+  // unchanged, and the handler returns before ever reaching the log. The
+  // one-line config fix would never surface for exactly the postings where
+  // it would start paying off.
+  if (prefill.salaryDeclined) logDeclinedSalaryOnce(db, roleId, jobId, prefill.salaryDeclined);
+
   if (skipIfFresh(db, 'role', roleId, 'role_research', key)) return;
 
-  const { data, usage } = await runTrackedExtraction(
-    db,
-    { entityType: 'role', entityId: roleId, kind: 'role_research', jobId },
-    researchWebScript,
-    ['role', recipe.instructions, wanted.join(',')],
-    context,
-  );
-  const extraction = data as RoleResearchExtraction;
+  // See the note in handleCompanyStructural on the empty-`wanted` branch.
+  // Unreachable while `equity` has no deterministic source, and kept for
+  // the same reason: an empty field list makes the script exit non-zero,
+  // so a future rule that fills the last field must skip the call rather
+  // than fail the job.
+  const result = wanted.length
+    ? await runTrackedExtraction(
+        db,
+        { entityType: 'role', entityId: roleId, kind: 'role_research', jobId },
+        researchWebScript,
+        ['role', recipe.instructions, wanted.join(',')],
+        context,
+      )
+    : undefined;
+  const extraction = (result?.data ?? {}) as RoleResearchExtraction;
+  const usage = result?.usage;
 
-  const salaryMin = typeof extraction.salaryMin === 'number' ? extraction.salaryMin : null;
-  const salaryMax = typeof extraction.salaryMax === 'number' ? extraction.salaryMax : null;
+  // The declaration wins where there is one, and the two sources are
+  // mutually exclusive by construction: a prefilled field was dropped from
+  // `wanted`, so the model was never asked and answers nothing for it.
+  //
+  // The three salary columns move as a unit. `salaryCurrency` is null on
+  // the model path, which is what clears a stale currency off figures that
+  // no longer have one.
+  const declared = prefill.salaryMin !== null && prefill.salaryMax !== null;
+  const salaryMin = declared ? prefill.salaryMin : typeof extraction.salaryMin === 'number' ? extraction.salaryMin : null;
+  const salaryMax = declared ? prefill.salaryMax : typeof extraction.salaryMax === 'number' ? extraction.salaryMax : null;
+  const salaryCurrency = declared ? prefill.salaryCurrency : null;
 
   const apply = db.transaction(() => {
     updateRoleResearchFields(db, roleId, {
       salaryMin,
       salaryMax,
+      salaryCurrency,
       equity: extraction.equity ?? null,
       // The declaration wins where there is one: the model was not even
       // asked (remoteEu is absent from `wanted`), so its answer here is
@@ -444,7 +494,7 @@ async function handleRoleResearch(db: Database.Database, roleId: number, jobId: 
       entityType: 'role',
       entityId: roleId,
       type: 'role.research_completed',
-      context: { salaryMin, salaryMax, remoteEu: prefill.remoteEu ?? normalizeRemoteEu(extraction.remoteEu), modelFields: wanted },
+      context: { salaryMin, salaryMax, salaryCurrency, remoteEu: prefill.remoteEu ?? normalizeRemoteEu(extraction.remoteEu), modelFields: wanted },
     });
 
     recordDerivation(db, { entityType: 'role', entityId: roleId, kind: 'role_research', key, usage, jobId });

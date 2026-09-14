@@ -90,6 +90,27 @@ export interface JobPostingLd {
   jobLocationType: string | null;
   /** Country names from `applicantLocationRequirements` — where a remote applicant may actually be. */
   applicantCountries: string[];
+  /** `baseSalary`, as declared. Null when absent or when no pair of figures could be read from it. */
+  baseSalary: DeclaredSalary | null;
+}
+
+/**
+ * A `MonetaryAmount` the publisher attached to the posting, read but not
+ * yet judged.
+ *
+ * `unitText` and `currency` are carried through rather than filtered here
+ * on purpose: this module reports what the page said, and whether an
+ * hourly rate in yen is usable is a question about *your* configuration,
+ * which `prefillRoleResearch` owns. Keeping the rejection there is also
+ * what lets it say why.
+ */
+export interface DeclaredSalary {
+  /** Uppercased ISO code as declared, e.g. `USD`. Never blank. */
+  currency: string | null;
+  /** Uppercased, e.g. `YEAR`, `MONTH`, `HOUR`. Null when the publisher omitted it — which is silence, not a year. */
+  unitText: string | null;
+  min: number;
+  max: number;
 }
 
 /**
@@ -225,6 +246,82 @@ function organization(value: unknown): { name: string | null; url: string | null
 }
 
 /**
+ * A finite, positive number, or null.
+ *
+ * Rejects `0`, `-1`, `NaN` — and numeric *strings*, deliberately. No live
+ * posting measured here writes one, and the moment you start parsing them
+ * you have to decide what `"211,400"` and `"$211,400"` mean. A rejected
+ * value costs one model call; a misparsed one is written straight into the
+ * priority score.
+ */
+function positiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function upper(value: unknown): string | null {
+  const text = clean(value);
+  return text === null ? null : text.toUpperCase();
+}
+
+/**
+ * The declared pay, from `baseSalary`.
+ *
+ * Measured against live postings on 2026-09-14, and the shapes genuinely
+ * differ: Ashby/ramp declares
+ * `{"@type":"MonetaryAmount","currency":"USD","value":{"minValue":211400,"maxValue":290600,"unitText":"YEAR"}}`,
+ * while cohere and linear declare nothing at all — `baseSalary` tracks US
+ * pay-transparency law, so coverage is patchy and location-dependent.
+ *
+ * Three shapes are accepted for `value`, all of which schema.org allows:
+ * a `QuantitativeValue` with `minValue`/`maxValue`, one with a single
+ * `value` (an exact figure, read as min = max), or a bare number.
+ *
+ * A range is returned all-or-nothing. A declaration giving only a
+ * `minValue` comes back null rather than half-filled, because the consumer
+ * writes `salary_min`, `salary_max` and `salary_currency` as one unit: a
+ * declared EUR minimum next to a model-researched maximum would be stamped
+ * with a currency that describes only one of them, and `compFitTerm` reads
+ * the maximum.
+ *
+ * `unitText` is read from the `value` first and the amount second — the
+ * former is where schema.org's own examples put it, the latter is where
+ * some publishers put it anyway.
+ */
+function baseSalary(value: unknown): DeclaredSalary | null {
+  const node = Array.isArray(value) ? value[0] : value;
+  if (!isRecord(node)) return null;
+
+  const amount = isRecord(node.value) ? node.value : null;
+  const bare = positiveNumber(node.value);
+
+  let min: number | null;
+  let max: number | null;
+  if (amount) {
+    const exact = positiveNumber(amount.value);
+    min = positiveNumber(amount.minValue) ?? exact;
+    max = positiveNumber(amount.maxValue) ?? exact;
+  } else {
+    min = bare;
+    max = bare;
+  }
+  if (min === null || max === null) return null;
+  // A publisher that swapped them still declared a range; ordering it here
+  // keeps every consumer from having to.
+  if (min > max) [min, max] = [max, min];
+
+  return {
+    // `currency` only. `currencyCode` is not a schema.org property of
+    // MonetaryAmount, and an unmeasured fallback does not earn its place
+    // here — a declaration we cannot read costs one model call, which is
+    // what would have happened anyway.
+    currency: upper(node.currency),
+    unitText: (amount ? upper(amount.unitText) : null) ?? upper(node.unitText),
+    min,
+    max,
+  };
+}
+
+/**
  * The first `JobPosting` declared on the page, or `null`.
  *
  * Never throws. A malformed block is skipped and scanning continues — a
@@ -259,6 +356,7 @@ export function findJobPostingLd(html: string): JobPostingLd | null {
         companyUrl: org.url,
         jobLocationType: clean(node.jobLocationType),
         applicantCountries: applicantCountries(node.applicantLocationRequirements),
+        baseSalary: baseSalary(node.baseSalary),
       };
     }
   }

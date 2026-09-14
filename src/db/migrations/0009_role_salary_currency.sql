@@ -1,0 +1,20 @@
+-- What currency a role's salary figures are in.
+--
+-- `salary_min`/`salary_max` have been bare integers since 0001, and
+-- `compFitTerm` compares `salary_max` to `preferences.minSalary` as bare
+-- integers too. That was tolerable only while every figure came from the
+-- same place (a web search reading a posting written for you); it stops
+-- being tolerable the moment the JSON-LD `baseSalary` prefill starts
+-- accepting a publisher's own declaration, because ¥5,000,000 clears a
+-- €100,000 floor numerically while being about a third of it in fact.
+--
+-- Null means "not recorded" and is the value every existing row keeps:
+-- model-researched figures carry no currency, and back-filling a guess
+-- would be inventing data. `compFitTerm` treats null as "assume the floor's
+-- currency", which is exactly what it did before this column existed — so
+-- nothing about an existing role's score changes.
+--
+-- Written and cleared as a unit with the figures it describes (see
+-- `updateResearchFields`): a currency left behind after new numbers are
+-- written would describe the previous ones.
+ALTER TABLE roles ADD COLUMN salary_currency TEXT;
