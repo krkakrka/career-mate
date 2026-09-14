@@ -6,12 +6,13 @@ import { getCompanyById } from '../../db/repositories/companies.js';
 import { DuplicateError } from '../../db/errors.js';
 import { recordEvent } from '../../db/repositories/events.js';
 import { enqueueJob, type JobRecord } from '../../db/repositories/jobs.js';
-import { createRole } from '../../db/repositories/roles.js';
+import { createRole, findRoleByUrl } from '../../db/repositories/roles.js';
 import { contextKey, recipeVersion } from '../../derive/keys.js';
 import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
 import { recordDerivation } from '../../derive/record.js';
 import { runTrackedExtraction } from '../../enrichment/tracked-extraction.js';
 import { matchesPreferences } from '../../domain/preference-match.js';
+import { gateDiscoveredUrl, type GateVerdict } from '../../derive/discover-gate.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
 import type { NotificationJobPayload } from './notification.js';
 
@@ -25,8 +26,17 @@ interface DiscoverExtraction {
 
 export interface ApplyDiscoveredRolesResult {
   created: number;
+  /** Rejected on preferences, a bad URL, or already being tracked. Disjoint from `closed`. */
   skipped: number;
+  /** Rejected by the gate as an already-closed posting, so never created. Disjoint from `skipped`. */
+  closed: number;
 }
+
+/** Five minutes of gating leaves a discover job comfortably inside `stale_running_job_minutes` (30). */
+const DEFAULT_GATE_BUDGET_MS = 5 * 60 * 1000;
+
+/** What a candidate gets once the gating budget is spent: tracked, as it would have been anyway. */
+const ungated: GateVerdict = { track: true, reason: 'undetermined' };
 
 export async function handleDiscoveryJob(db: Database.Database, job: JobRecord): Promise<void> {
   const payload = JSON.parse(job.payload) as DiscoveryJobPayload;
@@ -69,7 +79,27 @@ async function handleCompanyDiscover(db: Database.Database, companyId: number, j
     jobId,
   });
 
-  applyDiscoveredRoles(db, companyId, extraction, preferences);
+  await applyDiscoveredRoles(db, companyId, extraction, preferences);
+}
+
+export interface ApplyDiscoveredRolesOptions {
+  /**
+   * Overridable so the filtering/dedupe logic stays testable without a
+   * network: the real gate is covered directly in `discover-gate.test.ts`.
+   */
+  gate?: (db: Database.Database, url: string) => Promise<GateVerdict>;
+  /**
+   * Wall-clock budget for gating one discover run.
+   *
+   * Gating is N serial fetches at up to 15 s each, and
+   * `requeueStaleRunningJobs` rests on "nothing legitimate runs for 30
+   * minutes". A company returning a hundred candidates on slow hosts would
+   * blow through that, and the sweep would requeue a still-running
+   * discover into a *second* paid web search. Past the budget, remaining
+   * candidates are tracked ungated — exactly the behaviour before this
+   * gate existed.
+   */
+  gateBudgetMs?: number;
 }
 
 /**
@@ -78,18 +108,23 @@ async function handleCompanyDiscover(db: Database.Database, companyId: number, j
  * enrichment.ts's `resolveRoleCompany` split (live call vs. what-to-do-with-
  * the-result are separate, independently testable functions).
  */
-export function applyDiscoveredRoles(
+export async function applyDiscoveredRoles(
   db: Database.Database,
   companyId: number,
   extraction: DiscoverExtraction,
   preferences: Preferences,
-): ApplyDiscoveredRolesResult {
+  options: ApplyDiscoveredRolesOptions = {},
+): Promise<ApplyDiscoveredRolesResult> {
   const company = getCompanyById(db, companyId);
   if (!company) throw new Error(`Company #${companyId} not found`);
 
+  const gate = options.gate ?? gateDiscoveredUrl;
+  const gateBudgetMs = options.gateBudgetMs ?? DEFAULT_GATE_BUDGET_MS;
+  const gatingDeadline = Date.now() + gateBudgetMs;
   const candidates = extraction.roles ?? [];
   let created = 0;
   let skipped = 0;
+  let closed = 0;
 
   for (const candidate of candidates) {
     const url = candidate.url?.trim();
@@ -100,7 +135,35 @@ export function applyDiscoveredRoles(
       continue;
     }
 
+    // The cheapest rejection, and the common one: re-running discover
+    // mostly re-surfaces roles already tracked. Gating first meant every
+    // one of those paid an HTTP fetch and a snapshot row per run — and a
+    // duplicate whose page had since closed was booked as a closure rather
+    // than as the duplicate it is.
+    if (findRoleByUrl(db, url, companyId)) {
+      skipped++;
+      continue;
+    }
+
     try {
+      // Checked before the role exists, not after: a role created from a
+      // dead URL immediately queues a structural extraction and a research
+      // call, so the cheapest moment to find out is now.
+      const verdict = Date.now() < gatingDeadline ? await gate(db, url) : ungated;
+      if (!verdict.track) {
+        recordEvent(db, {
+          entityType: 'company',
+          entityId: companyId,
+          type: 'company.discover_candidate_closed',
+          context: { url, title, reason: verdict.reason, detail: verdict.detail },
+        });
+        // Counted on its own, not also as `skipped`: a consumer adding the
+        // three up would double-count, and "skipped" would stop meaning
+        // "rejected on preferences or already tracked".
+        closed++;
+        continue;
+      }
+
       const role = createRole(db, { companyId, url });
       enqueueJob(db, { topic: 'enrichment', payload: roleStructuralPayload(role.id) });
       recordEvent(db, {
@@ -135,7 +198,7 @@ export function applyDiscoveredRoles(
     entityType: 'company',
     entityId: companyId,
     type: 'company.discover_completed',
-    context: { candidatesFound: candidates.length, created, skipped },
+    context: { candidatesFound: candidates.length, created, skipped, closed },
   });
 
   if (created > 0) {
@@ -155,5 +218,5 @@ export function applyDiscoveredRoles(
     enqueueJob(db, { topic: 'notification', payload: notification });
   }
 
-  return { created, skipped };
+  return { created, skipped, closed };
 }
