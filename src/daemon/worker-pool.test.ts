@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb } from '../db/client.js';
 import { enqueueJob, getJobById, listJobs } from '../db/repositories/jobs.js';
+import { withOrigin } from '../lib/origin.js';
 import { drainOnce, startPolling } from './worker-pool.js';
 
 let tempDir: string;
@@ -170,5 +171,80 @@ describe('stop() actually stops', () => {
     // And it stays stopped.
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(handled).toBe(handledAtStop);
+  });
+});
+
+describe('origin propagation', () => {
+  it('bills a chained job to the surface that started the chain', async () => {
+    // Without this, a request from the agent is attributed to `mcp` for its
+    // first hop and `daemon` for every one after — splitting a single
+    // request's cost across two surfaces and under-reporting the expensive
+    // half, since the chained research call is the one that spends money.
+    const first = withOrigin('mcp', () => enqueueJob(db, { topic: 'notification', payload: { hop: 1 } }));
+
+    await drainOnce({
+      db,
+      handlers: {
+        // The daemon enqueuing follow-up work while handling a job, which
+        // is what every enrichment handler does.
+        notification: (job) => {
+          const { hop } = JSON.parse(job.payload) as { hop: number };
+          if (hop === 1) enqueueJob(db, { topic: 'notification', payload: { hop: 2 } });
+        },
+      },
+      concurrency: { notification: 1 },
+    });
+
+    const origins = listJobs(db, {}).map((job) => job.origin);
+    expect(origins).toEqual(['mcp', 'mcp']);
+    expect(first.origin).toBe('mcp');
+  });
+
+  it('leaves a job with no recorded origin unattributed instead of billing the drainer', async () => {
+    // NULL means "not recorded" — every job predating migration 0010 — and
+    // `cm worker drain` runs this pool inside a CLI process. Falling back to
+    // the process origin moved a batch of legacy work into the CLI's bill
+    // that no CLI command ever asked for.
+    const legacy = enqueueJob(db, { topic: 'notification', payload: { hop: 1 } });
+    db.prepare('UPDATE jobs SET origin = NULL WHERE id = ?').run(legacy.id);
+
+    await withOrigin('cli', () =>
+      drainOnce({
+        db,
+        handlers: { notification: () => void enqueueJob(db, { topic: 'enrichment', payload: {} }) },
+        concurrency: { notification: 1 },
+      }),
+    );
+
+    const child = listJobs(db, {}).find((job) => job.topic === 'enrichment')!;
+    expect(child.origin).toBe('daemon');
+  });
+
+  it('keeps concurrent chains from stealing each other\'s origin', async () => {
+    // The reason origin is AsyncLocalStorage and not a module-level
+    // variable: drainOnce runs several slots through Promise.all, and a
+    // plain global would be overwritten by whichever handler interleaved.
+    withOrigin('mcp', () => enqueueJob(db, { topic: 'notification', payload: { from: 'mcp', delay: 20 } }));
+    withOrigin('cli', () => enqueueJob(db, { topic: 'notification', payload: { from: 'cli', delay: 1 } }));
+
+    await drainOnce({
+      db,
+      handlers: {
+        notification: async (job) => {
+          const { from, delay } = JSON.parse(job.payload) as { from: string; delay: number };
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          enqueueJob(db, { topic: 'enrichment', payload: { child: from } });
+        },
+      },
+      concurrency: { notification: 2 },
+    });
+
+    // Filtered here, not in listJobs — it takes no topic filter, and
+    // passing one is silently ignored rather than rejected.
+    const children = listJobs(db, {}).filter((job) => job.topic === 'enrichment');
+    for (const child of children) {
+      expect(child.origin).toBe((JSON.parse(child.payload) as { child: string }).child);
+    }
+    expect(children.length).toBe(2);
   });
 });

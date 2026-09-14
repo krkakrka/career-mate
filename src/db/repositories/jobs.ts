@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { inferJobEntity } from '../../domain/job-entity.js';
 import type { JobTopic } from '../../domain/job-topic.js';
+import { getOrigin } from '../../lib/origin.js';
 import { InvalidStateError, NotFoundError } from '../errors.js';
 import { sanitizeOperationalError, tryRecordOperationalLog } from './operational-logs.js';
 
@@ -25,6 +26,8 @@ export interface JobRecord {
   duration_ms: number | null;
   /** When the current attempt was claimed; the basis for `duration_ms`. */
   claimed_at: string | null;
+  /** Which surface caused this job — `cli`, `mcp`, or `daemon` for work the daemon started itself. Null on rows predating the column. */
+  origin: string | null;
 }
 
 export interface EnqueueJobParams {
@@ -35,9 +38,12 @@ export interface EnqueueJobParams {
 
 export function enqueueJob(db: Database.Database, params: EnqueueJobParams): JobRecord {
   const payloadJson = JSON.stringify(params.payload ?? {});
+  // Stamped from the ambient origin, which the worker sets to the origin of
+  // the job it is handling — so a chain started from the agent stays billed
+  // to the agent instead of turning into `daemon` at the first hop.
   const result = db
-    .prepare('INSERT INTO jobs (topic, payload, priority) VALUES (?, ?, ?)')
-    .run(params.topic, payloadJson, params.priority ?? 0);
+    .prepare('INSERT INTO jobs (topic, payload, priority, origin) VALUES (?, ?, ?, ?)')
+    .run(params.topic, payloadJson, params.priority ?? 0, getOrigin());
 
   const job = getJobById(db, result.lastInsertRowid as number);
   if (!job) throw new Error('Job vanished immediately after insert');

@@ -1,0 +1,20 @@
+-- Which surface caused this job.
+--
+-- Step 26 asks whether the agent is better than the CLI and what it costs.
+-- Durations were already answerable — `operational_logs.component` is
+-- either `cli` or `mcp` — but money was not: the daemon spends it, on a
+-- queue both surfaces feed, so grouping `model_calls` by who made the call
+-- answers "what did enrichment cost" and never "what did asking the agent
+-- cost".
+--
+-- `model_calls.job_id` -> `jobs.origin` closes that gap. A job enqueued
+-- while handling another inherits its origin, so one request's whole
+-- enrichment chain is billed to the surface that asked for it rather than
+-- split between `mcp` and `daemon`.
+--
+-- Null means "not recorded": every job that predates this column, and
+-- anything enqueued by a path that never set an origin. Reported as
+-- unattributed rather than assigned to a surface — a spend figure that
+-- quietly absorbs unknowns is worse than one that admits them, since the
+-- entire point of this column is deciding which surface to keep using.
+ALTER TABLE jobs ADD COLUMN origin TEXT;

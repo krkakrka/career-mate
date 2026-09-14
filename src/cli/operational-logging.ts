@@ -13,27 +13,47 @@ import { tryRecordOperationalLog } from '../db/repositories/operational-logs.js'
  */
 let runningAction: { command: string; startedAt: number; timed: boolean } | undefined;
 
-export function takeRunningAction(): { command: string; durationMs: number | null } | undefined {
+export function takeRunningAction(): { command: string; durationMs: number | null; startupMs: number | null } | undefined {
   if (!runningAction) return undefined;
   const { command, startedAt, timed } = runningAction;
   runningAction = undefined;
-  return { command, durationMs: timed ? Date.now() - startedAt : null };
+  return {
+    command,
+    durationMs: timed ? Date.now() - startedAt : null,
+    // Reported on the crash path too. Without it the startup median is
+    // computed over successes only, and in a window where the CLI only ever
+    // crashed — a malformed preferences.json, a locked database — the one
+    // number this measurement turns on would silently vanish from `cm
+    // status`.
+    startupMs: startupCostMs(startedAt),
+  };
 }
 
 /**
- * Commands that stay open until interrupted, and whose wall time therefore
- * measures how long you left a terminal open rather than how long any work
- * took.
+ * Commands whose wall time is not the cost of one interaction, and which
+ * therefore must not be timed as one.
  *
- * `cm logs --follow` blocks on a promise resolved only by SIGINT, and a
- * SIGINT handler suppresses default termination — so Commander's
- * postAction still runs and records the whole session. One hour-long watch
- * writes a 3,600,000 ms row that then occupies the top of a five-row
- * "slowest actions" list for a week, burying exactly the enrichment and
- * fetch timings the panel exists to surface.
+ * Two different distortions, same remedy:
+ *
+ * - **`cm logs --follow`** blocks on a promise resolved only by SIGINT, and
+ *   a SIGINT handler suppresses default termination — so Commander's
+ *   postAction still runs and records the whole session. One hour-long
+ *   watch writes a 3,600,000 ms row that then occupies the top of a
+ *   five-row "slowest actions" list for a week, burying exactly the
+ *   enrichment and fetch timings the panel exists to surface.
+ *
+ * - **`cm worker drain`** runs the worker pool in-process, so its duration
+ *   covers every enrichment job it happened to pick up — model calls
+ *   included. Timed as a CLI action it attributes the *daemon's* work to
+ *   the CLI surface, and since every MCP tool merely enqueues and returns,
+ *   `cm status` would report the CLI as minutes-slow against an agent that
+ *   looks instant. That inverts the exact comparison Step 26 exists to
+ *   make.
  */
 function isLongLivedInvocation(command: Command): boolean {
-  return commandPath(command) === 'logs' && Boolean((command.opts() as { follow?: boolean }).follow);
+  const name = commandPath(command);
+  if (name === 'worker drain') return true;
+  return name === 'logs' && Boolean((command.opts() as { follow?: boolean }).follow);
 }
 
 function commandPath(command: Command): string {
@@ -50,6 +70,29 @@ function commandPath(command: Command): string {
  * run nested actions, and a shared `startedAt` would attribute the inner
  * command's duration to the outer one.
  */
+
+/**
+ * Everything that happened before the action did: Node bootstrap, tsx
+ * registering its ESM loader, module evaluation, Commander parsing.
+ *
+ * Recorded because leaving it out made the CLI look ~65x cheaper than it
+ * is. `cm roles list` reports 5 ms of work while taking 340 ms of a
+ * person's time, and the MCP server — a long-lived process that pays this
+ * once — answers the same request in about 1 ms. Comparing only in-process
+ * durations would have concluded the two surfaces were near-identical,
+ * which is the opposite of what the numbers say.
+ *
+ * `process.uptime()` covers the whole process, unlike any timer this module
+ * could start: by the time this file is even imported, most of the cost has
+ * already been paid.
+ */
+export function startupCostMs(began: number | undefined): number | null {
+  if (began === undefined) return null;
+  const sinceProcessStart = process.uptime() * 1000;
+  const sinceActionStart = Date.now() - began;
+  return Math.max(0, Math.round(sinceProcessStart - sinceActionStart));
+}
+
 export function installCliOperationalLogging(program: Command): void {
   const startedAt = new WeakMap<Command, number>();
 
@@ -79,6 +122,7 @@ export function installCliOperationalLogging(program: Command): void {
       // A failed command's duration is as interesting as a successful
       // one's — often more so, since timeouts are slow failures.
       durationMs: began === undefined || isLongLivedInvocation(actionCommand) ? null : Date.now() - began,
+      context: { startupMs: startupCostMs(began) },
     });
     runningAction = undefined;
   });

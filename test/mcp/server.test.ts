@@ -152,6 +152,26 @@ describe('tools/call', () => {
     expect(detail.stageHistory.length).toBeGreaterThan(0);
   });
 
+  it('stamps the jobs it enqueues as caused by the agent', async () => {
+    // The wiring is a bare import side-effect (`setProcessOrigin('mcp')`),
+    // and deleting it leaves every other test green while `processOrigin`
+    // falls back to `cli` — so every agent-caused job would be billed to the
+    // CLI and `cm status` would confidently report the comparison inverted.
+    const added = (await callTool('add_opportunity', { url: 'https://acme.example.com/jobs/origin' })) as {
+      opportunity: { id: number };
+    };
+    expect(added.opportunity.id).toBeGreaterThan(0);
+
+    const db = openDb(path.join(dataDir, 'career-mate.db'));
+    try {
+      const origins = (db.prepare('SELECT origin FROM jobs').all() as { origin: string | null }[]).map((r) => r.origin);
+      expect(origins.length).toBeGreaterThan(0);
+      expect(new Set(origins)).toEqual(new Set(['mcp']));
+    } finally {
+      db.close();
+    }
+  });
+
   it('is idempotent on re-adding a tracked URL', async () => {
     await callTool('add_opportunity', { url: 'https://acme.example.com/jobs/1' });
     const again = (await callTool('add_opportunity', { url: 'https://acme.example.com/jobs/1' })) as { created: boolean };

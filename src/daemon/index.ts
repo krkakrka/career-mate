@@ -8,6 +8,11 @@ import { claimPidFile, removePidFile } from '../lib/daemon-pid.js';
 import { dbPath } from '../lib/paths.js';
 import { buildHandlerRegistry, DEFAULT_TOPIC_CONCURRENCY } from './handlers/index.js';
 import { startPolling } from './worker-pool.js';
+import { setProcessOrigin } from '../lib/origin.js';
+
+// Jobs this process enqueues are caused by this surface; the worker
+// overrides it per job so a chain keeps the origin that started it.
+setProcessOrigin('daemon');
 
 const POLL_INTERVAL_MS = 500;
 

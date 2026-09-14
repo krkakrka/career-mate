@@ -46,6 +46,39 @@ export function registerStatusCommand(program: Command): void {
         }
       }
 
+      console.log('\nUsage by surface (7d):');
+      for (const surface of digest.surfaceUsage.surfaces) {
+        if (surface.calls === 0 && surface.modelCalls === 0) {
+          // Printed rather than omitted: a surface disappearing from the
+          // list reads as "never used" and as "not installed" identically.
+          console.log(`  ${surface.surface.padEnd(4)}  not used yet`);
+          continue;
+        }
+        const failures = surface.failures > 0 ? `, ${surface.failures} failed` : '';
+        const timing =
+          surface.medianMs === null
+            ? 'no timed calls'
+            : `median ${formatDuration(surface.medianMs)}, p90 ${formatDuration(surface.p90Ms!)}`;
+        // Startup is called out separately because it is the whole story
+        // here: a CLI command does 5 ms of work and costs a third of a
+        // second, while the long-lived MCP server pays this once.
+        const startup =
+          surface.medianStartupMs === null ? '' : `  ·  +${formatDuration(surface.medianStartupMs)} startup/call`;
+        console.log(
+          `  ${surface.surface.padEnd(4)}  ${surface.calls} call(s)${failures}  ·  ${timing}${startup}  ·  ` +
+            `$${surface.spendUsd.toFixed(2)} over ${surface.modelCalls} model call(s)`,
+        );
+      }
+      if (digest.surfaceUsage.unattributedModelCalls > 0) {
+        // Never folded into a surface: the point of this block is choosing
+        // which one to keep using, and a total that absorbs unknowns is
+        // worse than one that admits them.
+        console.log(
+          `  unattributed: $${digest.surfaceUsage.unattributedSpendUsd.toFixed(2)} over ` +
+            `${digest.surfaceUsage.unattributedModelCalls} model call(s) (daemon-initiated, or predating job origins)`,
+        );
+      }
+
       const { last7Days, last30Days } = digest.modelSpend;
       console.log(
         `\nModel spend: $${last7Days.totalUsd.toFixed(2)} over ${last7Days.calls} call(s) in 7d  ·  ` +

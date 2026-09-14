@@ -146,6 +146,7 @@ describe('0002_nullable_role_company migration', () => {
       '0007_drop_priority_score.sql',
       '0008_action_duration.sql',
       '0009_role_salary_currency.sql',
+      '0010_job_origin.sql',
     ]);
     db.close();
   });

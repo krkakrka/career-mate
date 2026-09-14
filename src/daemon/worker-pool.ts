@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { claimNextJob, completeJob, failJob, type JobRecord } from '../db/repositories/jobs.js';
+import { toOrigin, withOrigin } from '../lib/origin.js';
 import { tryRecordOperationalLog } from '../db/repositories/operational-logs.js';
 import type { JobTopic } from '../domain/job-topic.js';
 
@@ -41,7 +42,18 @@ async function drainSlot(options: WorkerPoolOptions, topic: JobTopic): Promise<n
     // jobs.ts already record the full lifecycle (including entity
     // correlation), so a second log here would just duplicate every entry.
     try {
-      await handler(job);
+      // The handler runs under the origin of the job it is handling, so any
+      // job it enqueues inherits it. Without this, a chain the agent started
+      // would be billed to `mcp` for its first hop and `daemon` for every
+      // one after — splitting a single request's cost across two surfaces
+      // and under-reporting the expensive half.
+      // Falls back to `daemon`, never to this process's own origin. NULL
+      // means "not recorded" — every job predating migration 0010 — and
+      // `cm worker drain` runs the pool inside a CLI process, so falling
+      // back to the process origin would move a batch of legacy work into
+      // the CLI's bill that no CLI command ever asked for. `daemon` is
+      // reported as unattributed, which is what an unrecorded origin is.
+      await withOrigin(toOrigin(job.origin) ?? 'daemon', () => handler(job));
       // This worker's own claim, not whatever the row says now: the stale
       // sweep may have requeued it and another worker re-claimed it while
       // this handler was running.

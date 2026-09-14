@@ -145,6 +145,29 @@ seconds and failed six of seven tests this way.
 Record what the subprocess needs *before* `runCli` (closing the server first), or drive the library
 in-process instead.
 
+## Measure the whole cost, not the part that is easy to time
+
+`operational_logs.duration_ms` measures time *inside* the process. For a CLI command that is a
+fraction of what the user waits: `cm roles list` reports ~6 ms of work and costs ~290 ms, because
+every invocation pays Node bootstrap and the tsx loader afresh. The first version of Step 26's
+report compared in-process durations and concluded the CLI and the agent were near-identical — the
+opposite of what the numbers say. Startup is recorded separately (`context.startupMs`, from
+`process.uptime()`), never folded in: a slow `medianMs` means the work is slow, while a large startup
+means the *shape* of the surface is expensive however fast the work is.
+
+The same rule governs what counts as one interaction. `cm worker drain` runs the worker pool
+in-process, so timing it as a CLI action attributes the daemon's model calls to the CLI surface —
+it is excluded, alongside `cm logs --follow`, by `isLongLivedInvocation`.
+
+## An unrecorded origin is not this process's origin
+
+`jobs.origin` is NULL for everything predating migration 0010. The worker falls back to `daemon`
+(reported as unattributed), never to the draining process's own origin — `cm worker drain` runs in a
+CLI process, so falling back would move a batch of legacy work into the CLI's bill that no CLI
+command asked for. Origin propagates through `AsyncLocalStorage`, not a module global: the pool runs
+several drain slots through `Promise.all`, and a shared variable would be overwritten by whichever
+handler interleaved.
+
 ## Delivery process
 
 Each step: tests first, implement, then an independent review (`/code-review`), address every

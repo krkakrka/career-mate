@@ -67,3 +67,66 @@ describe('cm status', () => {
     expect(result.stdout).toMatch(/#1.*reapply_after/);
   });
 });
+
+describe('cm status — usage by surface', () => {
+  it('names both surfaces even before either has been used', () => {
+    // A surface missing from the list reads as "never used" and as "not
+    // installed" identically, and the block exists to compare the two.
+    const result = runCli(['status'], { dataDir });
+
+    expect(result.stdout).toContain('Usage by surface (7d):');
+    expect(result.stdout).toMatch(/cli\s+not used yet/);
+    expect(result.stdout).toMatch(/mcp\s+not used yet/);
+  });
+
+  it('counts a real CLI invocation and reports its timing', () => {
+    // Driven through the actual binary rather than by inserting log rows:
+    // the measurement is only worth anything if the instrumentation it
+    // depends on is really wired to the commands people run.
+    runCli(['companies', 'list'], { dataDir });
+    runCli(['companies', 'list'], { dataDir });
+
+    const result = runCli(['status'], { dataDir });
+    const line = result.stdout.split('\n').find((l) => l.trim().startsWith('cli'))!;
+
+    expect(line).toMatch(/cli\s+\d+ call\(s\)/);
+    expect(line).toContain('median');
+    expect(line).toContain('p90');
+    expect(line).toContain('model call(s)');
+    // The finding this block exists to surface: a CLI command does a few ms
+    // of work and costs a third of a second, because every invocation pays
+    // Node and the tsx loader afresh. Omitting it made the CLI look ~65x
+    // cheaper than it is.
+    expect(line).toMatch(/\+\S+ startup\/call/);
+  });
+
+  it('attributes daemon spend to the surface that caused the job', () => {
+    // Neither surface spends anything directly — the daemon does, on a
+    // queue both feed — so without jobs.origin this block could only ever
+    // report $0.00 against each surface and the whole comparison would be
+    // half-measured.
+    const db = openDb(dbPath);
+    const job = db
+      .prepare("INSERT INTO jobs (topic, payload, origin) VALUES ('enrichment', '{}', 'mcp')")
+      .run();
+    db.prepare(
+      "INSERT INTO model_calls (kind, model, cost_usd, job_id) VALUES ('role_research', 'sonnet', 0.42, ?)",
+    ).run(job.lastInsertRowid as number);
+    db.close();
+
+    const result = runCli(['status'], { dataDir });
+    const line = result.stdout.split('\n').find((l) => l.trim().startsWith('mcp'))!;
+
+    expect(line).toContain('$0.42 over 1 model call(s)');
+  });
+
+  it('shows unattributed spend separately rather than hiding it in a surface', () => {
+    const db = openDb(dbPath);
+    db.prepare("INSERT INTO model_calls (kind, model, cost_usd) VALUES ('role_research', 'sonnet', 0.19)").run();
+    db.close();
+
+    const result = runCli(['status'], { dataDir });
+
+    expect(result.stdout).toContain('unattributed: $0.19 over 1 model call(s)');
+  });
+});

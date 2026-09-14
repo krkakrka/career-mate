@@ -64,7 +64,7 @@ try {
       // filter for — and `cm status` would list them as an unrelated row.
       action: inFlight ? inFlight.command : 'unhandled-action',
       error,
-      context: { unhandled: true },
+      context: { unhandled: true, startupMs: inFlight?.startupMs ?? null },
       durationMs: inFlight?.durationMs ?? null,
     });
   } catch {

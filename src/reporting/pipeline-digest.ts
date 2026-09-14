@@ -4,6 +4,7 @@ import { listRecruiterContacts, type RecruiterContact } from '../db/repositories
 import type { Role } from '../db/repositories/roles.js';
 import { ACTIVE_ROLE_STATUSES, ROLE_STATUSES, type RoleStatus } from '../domain/role-status.js';
 import { spendSince, type ModelSpend } from '../db/repositories/model-calls.js';
+import { buildSurfaceUsage, type SurfaceUsageReport } from './surface-usage.js';
 
 export interface StaleRole {
   id: number;
@@ -34,6 +35,8 @@ export interface PipelineDigest {
   modelSpend: { last7Days: ModelSpend; last30Days: ModelSpend };
   /** The slowest recorded actions — where the waiting actually goes. */
   slowestActions: SlowAction[];
+  /** How each surface was actually used, and what it cost — the CLI-vs-agent comparison, from real use. */
+  surfaceUsage: SurfaceUsageReport;
 }
 
 export interface SlowAction {
@@ -129,6 +132,8 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
       .all() as Pick<Role, 'id' | 'title' | 'url' | 'reapply_after'>[]
   ).map(toReapplyRole);
 
+  const since7d = isoDaysAgo(7);
+
   return {
     statusCounts,
     staleRoles,
@@ -136,9 +141,15 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
     reapplyReady,
     reapplyUpcoming,
     modelSpend: {
-      last7Days: spendSince(db, isoDaysAgo(7)),
+      last7Days: spendSince(db, since7d),
       last30Days: spendSince(db, isoDaysAgo(30)),
     },
-    slowestActions: slowestActionsSince(db, isoDaysAgo(7)),
+    slowestActions: slowestActionsSince(db, since7d),
+    // The same cutoff for both, computed once: `cm status` prints the
+    // per-surface spend directly above the 7-day total, and two
+    // `isoDaysAgo(7)` calls milliseconds apart can put a `model_calls` row
+    // inside one window and outside the other — making the two lines
+    // disagree by a few cents with nothing to explain it.
+    surfaceUsage: buildSurfaceUsage(db, since7d),
   };
 }

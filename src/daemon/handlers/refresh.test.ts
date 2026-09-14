@@ -224,6 +224,7 @@ describe('handleRoleClosureCheck — job payload dispatch', () => {
         attempts: 0,
         duration_ms: null,
         claimed_at: null,
+        origin: 'cli',
         available_at: new Date().toISOString(),
         error: null,
         created_at: new Date().toISOString(),

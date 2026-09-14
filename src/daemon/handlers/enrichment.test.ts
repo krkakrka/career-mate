@@ -28,6 +28,7 @@ function fakeJob(payload: unknown): JobRecord {
     updated_at: new Date().toISOString(),
     duration_ms: null,
     claimed_at: null,
+    origin: 'cli',
   };
 }
 
