@@ -67,7 +67,8 @@ cm interview-note add
 cm tips <role-id>
 cm refresh                 # re-check tracked roles for closure (fire-and-forget)
 cm discover                # scan tracked companies for new matching roles (fire-and-forget)
-cm status                  # pipeline digest: counts, stale roles, overdue follow-ups, reapply dates, model spend
+cm status                  # pipeline digest: counts, stale roles, overdue follow-ups, reapply dates,
+                           #   stuck jobs, per-surface usage (cli vs mcp), model spend
 cm auth login-browser
 cm auth check <url>        # fetch through the saved session; reports status, bytes, ms, redirects, trace
 cm auth record-har <url>   # capture a page's traffic, replayable offline with `auth check --replay-har`

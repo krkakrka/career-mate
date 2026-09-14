@@ -9,6 +9,25 @@ function printRoleLine(role: StaleRole | ReapplyRole, extra: string): void {
   console.log(`  #${role.id}  ${role.title ?? '(untitled)'}  ${extra}  ${role.url}`);
 }
 
+/**
+ * The payload's `kind` and entity, where it has them — enough to recognise
+ * the job without printing raw JSON.
+ *
+ * Exported for its own tests: both fallbacks are reachable. Notification
+ * payloads carry no `kind` at all, and a payload column can hold anything a
+ * hand-edited database put there.
+ */
+export function summarizePayload(payload: string): string {
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    const kind = typeof parsed.kind === 'string' ? parsed.kind : '(no kind)';
+    const id = Object.entries(parsed).find(([key]) => key.endsWith('Id'));
+    return id ? `${kind} ${id[0]}=${String(id[1])}` : kind;
+  } catch {
+    return '(unreadable payload)';
+  }
+}
+
 export function registerStatusCommand(program: Command): void {
   program
     .command('status')
@@ -43,6 +62,39 @@ export function registerStatusCommand(program: Command): void {
         console.log('\nSlowest actions (7d):');
         for (const slow of digest.slowestActions) {
           console.log(`  ${formatDuration(slow.durationMs).padStart(7)}  ${slow.component}.${slow.action}  ${slow.occurredAt}`);
+        }
+      }
+
+      const stuck = digest.stuckWork;
+      if (stuck.failed.length > 0 || stuck.stranded.length > 0) {
+        console.log('\nStuck work:');
+        for (const job of stuck.failed) {
+          console.log(`  failed    #${job.id}  ${job.topic}  ${summarizePayload(job.payload)}  after ${job.attempts} attempt(s)  ${job.since}`);
+          // JSON.stringify, matching `cm worker jobs`: a sanitized error is
+          // capped and secret-free but keeps its newlines, and `claude -p`
+          // stderr is routinely multi-line — printed raw it wraps across the
+          // lines below it and hands any ANSI escape straight to the terminal.
+          if (job.error) console.log(`            ${JSON.stringify(job.error)}`);
+        }
+        if (stuck.moreFailed > 0) console.log(`  ... and ${stuck.moreFailed} more failed`);
+        for (const job of stuck.stranded) {
+          // `claimed` only when the claim time is actually recorded. Falling
+          // back to `updated_at` would print a claim time the row does not
+          // have.
+          const claimed = job.claimedAt ? `claimed ${job.claimedAt}` : `last touched ${job.since}`;
+          console.log(`  stranded  #${job.id}  ${job.topic}  ${summarizePayload(job.payload)}  ${claimed}  after ${job.attempts} attempt(s)`);
+        }
+        if (stuck.moreStranded > 0) console.log(`  ... and ${stuck.moreStranded} more stranded`);
+        // The two need different actions, and neither happens by itself in a
+        // read-only session — which is the only kind of session that would
+        // not already know.
+        if (stuck.failed.length > 0) console.log('  retry a failed job:  cm worker retry <id>');
+        if (stuck.stranded.length > 0) {
+          // Not an unconditional promise: the sweep increments `attempts`
+          // and gives up at the retry limit, so a job already swept twice
+          // goes terminal on the next start rather than being requeued. The
+          // attempt count is printed above so that is predictable.
+          console.log('  stranded jobs are requeued when the daemon next starts — or failed, if retries are exhausted:  cm daemon start');
         }
       }
 

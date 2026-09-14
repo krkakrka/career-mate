@@ -5,6 +5,7 @@ import type { Role } from '../db/repositories/roles.js';
 import { ACTIVE_ROLE_STATUSES, ROLE_STATUSES, type RoleStatus } from '../domain/role-status.js';
 import { spendSince, type ModelSpend } from '../db/repositories/model-calls.js';
 import { buildSurfaceUsage, type SurfaceUsageReport } from './surface-usage.js';
+import { findStuckWork, type StuckWork } from './stuck-work.js';
 
 export interface StaleRole {
   id: number;
@@ -37,6 +38,8 @@ export interface PipelineDigest {
   slowestActions: SlowAction[];
   /** How each surface was actually used, and what it cost — the CLI-vs-agent comparison, from real use. */
   surfaceUsage: SurfaceUsageReport;
+  /** Jobs that have stopped making progress. Read-only sessions never start a daemon, so nothing else would say. */
+  stuckWork: StuckWork;
 }
 
 export interface SlowAction {
@@ -151,5 +154,6 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
     // inside one window and outside the other — making the two lines
     // disagree by a few cents with nothing to explain it.
     surfaceUsage: buildSurfaceUsage(db, since7d),
+    stuckWork: findStuckWork(db, settings.stale_running_job_minutes),
   };
 }

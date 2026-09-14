@@ -130,3 +130,101 @@ describe('cm status — usage by surface', () => {
     expect(result.stdout).toContain('unattributed: $0.19 over 1 model call(s)');
   });
 });
+
+describe('cm status — stuck work', () => {
+  it('says nothing when there is nothing stuck', () => {
+    // A permanent empty section would train you to skip the block, which is
+    // the opposite of what it is for.
+    expect(runCli(['status'], { dataDir }).stdout).not.toContain('Stuck work:');
+  });
+
+  it('surfaces a failed job with its error and what to do about it', () => {
+    // Read-only commands deliberately never start a daemon, so a session
+    // spent only reading would otherwise never learn that enrichment died
+    // three days ago and is not coming back.
+    const db = openDb(dbPath);
+    db.prepare(
+      `INSERT INTO jobs (topic, payload, status, attempts, error)
+       VALUES ('enrichment', '{"kind":"role-research","roleId":7}', 'failed', 3, 'claude -p exited 1')`,
+    ).run();
+    db.close();
+
+    const result = runCli(['status'], { dataDir });
+
+    expect(result.stdout).toContain('Stuck work:');
+    expect(result.stdout).toMatch(/failed\s+#\d+\s+enrichment\s+role-research roleId=7\s+after 3 attempt\(s\)/);
+    expect(result.stdout).toContain('claude -p exited 1');
+    expect(result.stdout).toContain('cm worker retry <id>');
+  });
+
+  it('counts the ones it did not list', () => {
+    // Without this the cap is exercised only below the CLI, and deleting
+    // both "... and N more" lines leaves the suite green — while the
+    // difference between "five failures" and "five of forty" is the
+    // difference between a blip and a stopped pipeline.
+    const db = openDb(dbPath);
+    const insert = db.prepare(
+      `INSERT INTO jobs (topic, payload, status, attempts, error, updated_at) VALUES ('enrichment', '{"kind":"role-research","roleId":1}', 'failed', 3, 'boom', ?)`,
+    );
+    for (let n = 0; n < 8; n += 1) insert.run(new Date(Date.now() - n * 1000).toISOString());
+    db.close();
+
+    const result = runCli(['status'], { dataDir });
+
+    expect(result.stdout.match(/^ {2}failed /gm)?.length).toBe(5);
+    expect(result.stdout).toContain('... and 3 more failed');
+  });
+
+  it('prints a multi-line error on one line', () => {
+    // `claude -p` stderr is routinely multi-line. Printed raw it wraps
+    // across the guidance lines below it and hands any ANSI escape straight
+    // to the terminal.
+    const db = openDb(dbPath);
+    db.prepare(
+      `INSERT INTO jobs (topic, payload, status, attempts, error) VALUES ('enrichment', '{"kind":"role-research","roleId":9}', 'failed', 3, ?)`,
+    ).run('line one\nline two\nline three');
+    db.close();
+
+    const result = runCli(['status'], { dataDir });
+
+    expect(result.stdout).toContain('"line one\\nline two\\nline three"');
+    expect(result.stdout).not.toMatch(/^line two$/m);
+  });
+
+  it('does not claim a claim time for a job that never recorded one', () => {
+    const db = openDb(dbPath);
+    db.prepare(
+      `INSERT INTO jobs (topic, payload, status, claimed_at, updated_at) VALUES ('enrichment', '{"kind":"role-structural","roleId":3}', 'running', NULL, ?)`,
+    ).run(new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString());
+    db.close();
+
+    const result = runCli(['status'], { dataDir });
+
+    expect(result.stdout).toContain('last touched');
+    expect(result.stdout).not.toMatch(/stranded[^\n]*claimed /);
+  });
+
+  it('distinguishes a stranded claim from a failure, and names the different remedy', () => {
+    const db = openDb(dbPath);
+    const longAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    // `updated_at` too, not just `claimed_at`: the stale sweep judges by
+    // `updated_at`, and this block matches its predicate exactly so the two
+    // cannot disagree about what "stranded" means.
+    db.prepare(
+      `INSERT INTO jobs (topic, payload, status, claimed_at, updated_at) VALUES ('enrichment', '{"kind":"role-structural","roleId":2}', 'running', ?, ?)`,
+    ).run(longAgo, longAgo);
+    db.close();
+
+    const result = runCli(['status'], { dataDir });
+
+    expect(result.stdout).toMatch(/stranded\s+#\d+\s+enrichment\s+role-structural roleId=2/);
+    // A stranded job is swept back into the queue by the next daemon start —
+    // a different action from retrying an exhausted one.
+    expect(result.stdout).toContain('cm daemon start');
+    expect(result.stdout).not.toContain('cm worker retry');
+    // Not promised unconditionally: the sweep gives up at the retry limit,
+    // and the attempt count on the line is what makes that predictable.
+    expect(result.stdout).toContain('or failed, if retries are exhausted');
+    expect(result.stdout).toMatch(/stranded[^\n]*after 0 attempt\(s\)/);
+  });
+});
