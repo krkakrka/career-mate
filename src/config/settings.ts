@@ -1,7 +1,8 @@
 import path from 'node:path';
-import { numberOr } from '../lib/config-coerce.js';
+import { numberOr, oneOfOr } from '../lib/config-coerce.js';
 import { loadJsonConfig } from '../lib/json-config.js';
 import { getDataDir } from '../lib/paths.js';
+import { TRACE_MODES, type TraceMode } from '../browser/trace.js';
 
 /** How old a page snapshot may be before a fetch takes a new one, per kind of page. */
 export interface PageRefreshDays {
@@ -36,6 +37,25 @@ export interface Settings {
    * exit** — the daemon then runs until stopped.
    */
   daemon_idle_exit_minutes: number;
+  /**
+   * When to write a Playwright trace for an authenticated fetch.
+   *
+   * `on-failure` by default. A failed browser fetch is otherwise
+   * unanalysable — the exception says "Timeout 20000ms exceeded" and
+   * nothing about whether the session cookie went out or a login wall came
+   * back — while `always` costs megabytes per fetch for runs that worked.
+   */
+  browser_trace: TraceMode;
+  /**
+   * How many traces to keep. Nothing else deletes them, and each is
+   * megabytes.
+   *
+   * Floored at 1 on read: a `0` here reads as "no cap" to anyone writing it
+   * by hand, while meaning "delete everything" to the pruner — including
+   * the trace of the run that just failed, whose path had already been
+   * printed.
+   */
+  browser_trace_keep: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -48,6 +68,8 @@ const DEFAULT_SETTINGS: Settings = {
   recompute_min_interval_minutes: 60,
   stale_running_job_minutes: 30,
   daemon_idle_exit_minutes: 30,
+  browser_trace: 'on-failure',
+  browser_trace_keep: 20,
 };
 
 export function loadSettings(): Settings {
@@ -74,5 +96,7 @@ export function loadSettings(): Settings {
     ),
     stale_running_job_minutes: numberOr(settings.stale_running_job_minutes, DEFAULT_SETTINGS.stale_running_job_minutes),
     daemon_idle_exit_minutes: numberOr(settings.daemon_idle_exit_minutes, DEFAULT_SETTINGS.daemon_idle_exit_minutes),
+    browser_trace: oneOfOr(settings.browser_trace, TRACE_MODES, DEFAULT_SETTINGS.browser_trace),
+    browser_trace_keep: Math.max(1, Math.floor(numberOr(settings.browser_trace_keep, DEFAULT_SETTINGS.browser_trace_keep))),
   };
 }

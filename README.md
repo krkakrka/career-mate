@@ -22,6 +22,8 @@ All 22 steps are built: the original 14, plus **Phase 2 — memoized data pipeli
 
 Known non-working path: login-gated research (Glassdoor via Playwright). The WLB job short-circuits because no `urlTemplate` is configured, and Google sign-in inside an automated browser is refused by Google, so `cm auth login-browser` cannot complete a Google-backed login. It is deprioritized; see the Phase 2 backlog for the replacement.
 
+The browser machinery underneath it does work, and `cm auth check <url>` is how you confirm that for yourself in one command rather than an afternoon — it reports status, bytes, wall time and any redirect, which is what separates "the plumbing is broken" from "the page redirected me to a login wall". Failures write a Playwright trace to `.data/traces/` (`npx playwright show-trace <file>`), since an exception message alone cannot tell you whether the session cookie went out.
+
 ## How it works
 
 ```
@@ -67,6 +69,8 @@ cm refresh                 # re-check tracked roles for closure (fire-and-forget
 cm discover                # scan tracked companies for new matching roles (fire-and-forget)
 cm status                  # pipeline digest: counts, stale roles, overdue follow-ups, reapply dates, model spend
 cm auth login-browser
+cm auth check <url>        # fetch through the saved session; reports status, bytes, ms, redirects, trace
+cm auth record-har <url>   # capture a page's traffic, replayable offline with `auth check --replay-har`
 cm inbox / cm inbox ack
 cm events <id>
 cm logs                    # durable CLI/daemon/job diagnostics, with filtering and --follow

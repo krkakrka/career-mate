@@ -20,6 +20,8 @@ const SETTINGS: Settings = {
   recompute_min_interval_minutes: 60,
   stale_running_job_minutes: 30,
   daemon_idle_exit_minutes: 30,
+  browser_trace: 'on-failure',
+  browser_trace_keep: 20,
 };
 
 let tempDir: string;

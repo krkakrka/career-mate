@@ -120,6 +120,31 @@ none. `COALESCE`ing them independently mixes sources: a model answering a minimu
 the *previous* declared maximum in place, and the maximum is the figure `compFitTerm` reads. Refuse
 rather than convert — a stored conversion rate is stale the day after it is written.
 
+## A recorded HAR is a credential
+
+The browser profile exists to hold an *authenticated* session, so a HAR recorded through it contains
+the live session cookie in plaintext — request `Cookie`, response `Set-Cookie`, and the HAR's own
+`cookies` arrays — and `content: 'embed'` puts whole response bodies in there too. `cm auth
+record-har` runs every recording through `redactHarSecrets` before the file reaches its destination,
+and that costs the feature nothing: `routeFromHAR` matches on URL and method and serves the recorded
+body, never reading those headers back. Redaction is not a general scrubber, though — a response that
+prints a token in its own body still carries it, which is why the command says so every time.
+
+Tracing follows the same rule from the other side: `cm auth login-browser` is never traced, whatever
+`settings.browser_trace` says, because a trace is screenshots plus DOM snapshots and that command's
+entire purpose is typing credentials into someone else's login form.
+
+## `runCli` blocks the event loop, so no fixture server can be live during it
+
+`test/helpers/run-cli.ts` uses `spawnSync`. That blocks the vitest worker's event loop — and an
+in-process `startFixtureServer` lives on that same loop, so it cannot accept the subprocess's
+connection and every request times out. The symptom is indistinguishable from a genuinely broken
+network path, which is what makes it expensive: the first draft of `test/cli/auth.test.ts` took 145
+seconds and failed six of seven tests this way.
+
+Record what the subprocess needs *before* `runCli` (closing the server first), or drive the library
+in-process instead.
+
 ## Delivery process
 
 Each step: tests first, implement, then an independent review (`/code-review`), address every

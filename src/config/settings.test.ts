@@ -37,6 +37,10 @@ describe('loadSettings', () => {
       recompute_min_interval_minutes: 60,
       stale_running_job_minutes: 30,
       daemon_idle_exit_minutes: 30,
+      // Traces are megabytes each, so the default keeps one only for the
+      // run that actually broke, and caps how many pile up.
+      browser_trace: 'on-failure',
+      browser_trace_keep: 20,
     });
   });
 
@@ -80,5 +84,28 @@ describe('loadSettings', () => {
 
     expect(() => loadSettings()).toThrow(/not valid JSON/);
     expect(fs.readFileSync(configPath, 'utf-8')).toBe('{"recruiter_nudge_days": 3,}');
+  });
+});
+
+describe('browser_trace coercion', () => {
+  it('falls back to the default for a mode that is not one of the three', () => {
+    // A misspelled mode is worse than a missing one: silently behaving like
+    // `always` fills the data directory with megabyte zips, and silently
+    // behaving like `never` leaves a failed login with no trace at all.
+    const configDir = path.join(tempDir, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    for (const browser_trace of ['on-fail', 'ALWAYS', true, 1, null]) {
+      fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ browser_trace }));
+      expect(loadSettings().browser_trace, JSON.stringify(browser_trace)).toBe('on-failure');
+    }
+  });
+
+  it('accepts each mode it does define', () => {
+    const configDir = path.join(tempDir, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    for (const mode of ['never', 'on-failure', 'always'] as const) {
+      fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ browser_trace: mode }));
+      expect(loadSettings().browser_trace).toBe(mode);
+    }
   });
 });

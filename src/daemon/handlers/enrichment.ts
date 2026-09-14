@@ -582,7 +582,27 @@ async function handleCompanyWlb(db: Database.Database, companyId: number, jobId:
     companyName: company.name ?? '',
     companySlug: slugify(company.name ?? ''),
   });
-  const html = await fetchAuthenticatedPage(url);
+  const html = await fetchAuthenticatedPage(url).catch((error: unknown) => {
+    // The only browser fetch the daemon makes, and the motivating failure
+    // for tracing at all. The trace path lives on the error object, and the
+    // job's own failure record keeps only `error.message` — so without this
+    // a multi-megabyte trace is written, never mentioned anywhere, and
+    // pruned away unseen after twenty more failures.
+    const tracePath = (error as { tracePath?: unknown })?.tracePath;
+    if (typeof tracePath === 'string') {
+      tryRecordOperationalLog(db, {
+        severity: 'warn',
+        outcome: 'failed',
+        component: 'enrichment',
+        action: 'browser-fetch-trace',
+        entityType: 'company',
+        entityId: companyId,
+        jobId,
+        context: { url, tracePath },
+      });
+    }
+    throw error;
+  });
   // The only fetch that does not go through the page store (it needs the
   // authenticated browser profile), so its source key is the hash of the
   // HTML it returned rather than a snapshot's text_hash.

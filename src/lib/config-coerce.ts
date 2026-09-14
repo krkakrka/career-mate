@@ -32,3 +32,15 @@ export function stringArrayOr(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback;
   return value.filter((item): item is string => typeof item === 'string');
 }
+
+/**
+ * A value that must be one of a fixed set.
+ *
+ * Needed because a misspelled mode is worse than a missing one: an unknown
+ * `browser_trace` silently behaving like `always` would fill the data
+ * directory with megabyte zips, and behaving like `never` would leave you
+ * debugging a failed login with no trace and no explanation.
+ */
+export function oneOfOr<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+}
