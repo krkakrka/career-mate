@@ -96,12 +96,22 @@ export function registerDebugCommand(program: Command): void {
         );
         if (runErrors === repeat) {
           console.log('# every attempt errored before producing output — likely transient/infra, not the model');
-        } else if (parseFailed > 0 && parsedOk > 0) {
-          console.log('# intermittent — model output is non-deterministic for this input');
-        } else if (parsedOk === 0) {
-          console.log('# deterministic failure — this input reliably produces bad output');
         } else if (parsedOk === repeat) {
           console.log('# no failure reproduced — the original may have been transient');
+        } else if (parseFailed > 0 && parsedOk > 0) {
+          console.log('# intermittent — model output is non-deterministic for this input');
+        } else if (parseFailed > 0 && runErrors > 0) {
+          // Checked before the deterministic verdict: 9 timeouts plus one
+          // parse failure leaves parsedOk at 0, which used to read as "this
+          // input reliably produces bad output" — the exact conflation the
+          // run-error count was added to prevent, just moved along one case.
+          console.log(
+            `# mixed — ${runErrors} run error(s) alongside ${parseFailed} bad output(s); rerun once the infra settles`,
+          );
+        } else if (parseFailed === repeat) {
+          console.log('# deterministic failure — this input reliably produces bad output');
+        } else {
+          console.log('# inconclusive — too few attempts produced output to judge');
         }
       }
     });

@@ -1,5 +1,9 @@
 import { fileURLToPath } from 'node:url';
-import { COMPANY_PREFILL_RULES_VERSION, ROLE_PREFILL_RULES_VERSION } from './structural.js';
+import {
+  COMPANY_PREFILL_RULES_VERSION,
+  ROLE_PREFILL_RULES_VERSION,
+  ROLE_RESEARCH_PREFILL_RULES_VERSION,
+} from './structural.js';
 import { sourcesPath } from '../enrichment/sources.js';
 import { combinedRecipeVersion } from './keys.js';
 
@@ -28,7 +32,15 @@ export function structuralRecipeVersion(entity: 'role' | 'company'): string {
   return combinedRecipeVersion([structuralScript], [`${entity}-prefill-rules@${prefill}`]);
 }
 
-/** The research prompt wrapper, plus the per-source `instructions` it wraps. */
-export function researchRecipeVersion(): string {
-  return combinedRecipeVersion([researchWebScript, sourcesPath]);
+/**
+ * The research prompt wrapper, the per-source `instructions` it wraps, and
+ * — for roles — the deterministic rules that now answer some of its fields.
+ *
+ * Per entity kind for the same reason `structuralRecipeVersion` is: the
+ * role prefill changing must not mark every company's research derivation
+ * stale and pay to redo it.
+ */
+export function researchRecipeVersion(entity: 'role' | 'company'): string {
+  const extra = entity === 'role' ? [`role-research-prefill-rules@${ROLE_RESEARCH_PREFILL_RULES_VERSION}`] : [];
+  return combinedRecipeVersion([researchWebScript, sourcesPath], [entity, ...extra]);
 }

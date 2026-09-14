@@ -30,14 +30,16 @@ import { isStale, type StalenessReason } from './staleness.js';
 export interface RecipeVersions {
   roleStructural: string;
   companyStructural: string;
-  research: string;
+  roleResearch: string;
+  companyResearch: string;
 }
 
 export function currentRecipeVersions(): RecipeVersions {
   return {
     roleStructural: structuralRecipeVersion('role'),
     companyStructural: structuralRecipeVersion('company'),
-    research: researchRecipeVersion(),
+    roleResearch: researchRecipeVersion('role'),
+    companyResearch: researchRecipeVersion('company'),
   };
 }
 
@@ -100,7 +102,7 @@ export function companyFieldGroupStatus(
     statusFor(db, 'company', company.id, 'company_structural', pageKey(db, company.url, recipes.companyStructural)),
     statusFor(db, 'company', company.id, 'company_research', {
       sourceKey: contextKey(buildCompanyResearchContext(company)),
-      recipeVersion: recipes.research,
+      recipeVersion: recipes.companyResearch,
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);
 }
@@ -114,7 +116,7 @@ export function roleFieldGroupStatus(
     statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url, recipes.roleStructural)),
     statusFor(db, 'role', role.id, 'role_research', {
       sourceKey: contextKey(buildRoleResearchContext(db, role)),
-      recipeVersion: recipes.research,
+      recipeVersion: recipes.roleResearch,
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);
 }

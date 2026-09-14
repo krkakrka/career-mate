@@ -173,10 +173,27 @@ export function completeJob(db: Database.Database, id: number, claimedAt?: strin
   // an unguarded write would let A mark the job done out from under B,
   // and B's own completion would then overwrite A's. Whoever still holds
   // the claim owns the outcome.
-  db.prepare(
-    `UPDATE jobs SET status = 'done', duration_ms = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE id = ? AND (claimed_at IS ? OR ? IS NULL)`,
-  ).run(durationMs, id, claimedAt ?? null, claimedAt ?? null);
+  const { changes } = db
+    .prepare(
+      `UPDATE jobs SET status = 'done', duration_ms = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND (claimed_at IS ? OR ? IS NULL)`,
+    )
+    .run(durationMs, id, claimedAt ?? null, claimedAt ?? null);
+
+  if (changes === 0) {
+    // Superseded: another worker owns this job now. Recording it as a
+    // success would put a completion that never happened into the table
+    // both surfaces are measured from.
+    tryRecordOperationalLog(db, {
+      severity: 'warn',
+      outcome: 'skipped',
+      component: 'job-queue',
+      action: 'complete',
+      jobId: id,
+      context: { reason: 'superseded by a later claim' },
+    });
+    return;
+  }
   const entity = job ? entityOf(job) : undefined;
   tryRecordOperationalLog(db, {
     outcome: 'succeeded',
@@ -217,10 +234,19 @@ export function failJob(
   // like a fast crash unless the duration is recorded.
   const durationMs = elapsedSinceClaim(options.claimedAt ?? job.claimed_at);
 
+  // Guarded on this worker's claim, like completeJob: without it a
+  // superseded worker's failure bumps attempts and marks the job pending
+  // while the worker that now owns it is still running — making it
+  // claimable by a third, and silently swallowing the real owner's result.
+  const claimGuard = 'AND (claimed_at IS ? OR ? IS NULL)';
+  const claimArgs = [options.claimedAt ?? null, options.claimedAt ?? null];
+
   if (attempts >= maxAttempts) {
     db.prepare(
-      "UPDATE jobs SET status = 'failed', attempts = ?, error = ?, duration_ms = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    ).run(attempts, sanitizedError, durationMs, id);
+      `UPDATE jobs SET status = 'failed', attempts = ?, error = ?, duration_ms = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? ${claimGuard}`,
+    ).run(attempts, sanitizedError, durationMs, id, ...claimArgs);
   } else {
     const delayMs = backoffMs * 2 ** (attempts - 1);
     const availableAt = new Date(Date.now() + delayMs).toISOString();
@@ -231,8 +257,8 @@ export function failJob(
     db.prepare(
       `UPDATE jobs SET status = 'pending', attempts = ?, error = ?, available_at = ?, duration_ms = ?,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ?`,
-    ).run(attempts, sanitizedError, availableAt, durationMs, id);
+       WHERE id = ? ${claimGuard}`,
+    ).run(attempts, sanitizedError, availableAt, durationMs, id, ...claimArgs);
   }
 
   const updated = getJobById(db, id);
@@ -316,7 +342,11 @@ export function requeueStaleRunningJobs(
         exhausted ? 'failed' : 'pending',
         attempts,
         'Left running by a daemon that stopped without completing it',
-        durationMs,
+        // Only on the terminal branch: a row going back to `pending` has no
+        // attempt in flight, and "null while pending or running" is the
+        // contract claimNextJob's reset exists to keep. The abandoned
+        // attempt's duration is in operational_logs either way.
+        exhausted ? durationMs : null,
         job.id,
       ).changes;
     if (changed === 0) continue; // someone else got to it first

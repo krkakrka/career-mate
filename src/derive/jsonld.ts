@@ -86,6 +86,84 @@ export interface JobPostingLd {
   title: string | null;
   companyName: string | null;
   companyUrl: string | null;
+  /** `"TELECOMMUTE"` is the only value schema.org defines; anything else (or absence) means the publisher said nothing. */
+  jobLocationType: string | null;
+  /** Country names from `applicantLocationRequirements` — where a remote applicant may actually be. */
+  applicantCountries: string[];
+}
+
+/**
+ * The EU, by the names publishers actually write.
+ *
+ * Measured against live Ashby postings: one declares
+ * `{"@type":"Country","name":"European Union"}` outright, another lists
+ * member states individually. Both have to resolve to the same answer.
+ *
+ * "Europe" is deliberately absent — it includes the UK, Switzerland and
+ * Norway, so it cannot settle *EU* eligibility, and guessing wrong here
+ * removes a good role from consideration via the priority score.
+ */
+const EU_NAMES = new Set(
+  [
+    'european union', 'eu', 'eea', 'european economic area',
+    'austria', 'belgium', 'bulgaria', 'croatia', 'cyprus', 'czechia', 'czech republic',
+    'denmark', 'estonia', 'finland', 'france', 'germany', 'greece', 'hungary', 'ireland',
+    'italy', 'latvia', 'lithuania', 'luxembourg', 'malta', 'netherlands', 'the netherlands',
+    'poland', 'portugal', 'romania', 'slovakia', 'slovenia', 'spain', 'sweden',
+  ].map((name) => name.toLowerCase()),
+);
+
+/**
+ * Names that are definitely *not* the EU.
+ *
+ * Needed to say "no" honestly. Without it, any name the EU list did not
+ * recognise counted as non-EU — so `Worldwide`, `Anywhere`, `EMEA` and
+ * `Deutschland` all produced a confident `no`, and a remote-worldwide
+ * posting (which is EU-eligible) scored *below* an unresearched one,
+ * permanently, because the model was never asked to correct it.
+ */
+const NON_EU_NAMES = new Set(
+  [
+    'united states', 'united states of america', 'usa', 'us', 'u.s.', 'u.s.a.',
+    'canada', 'united kingdom', 'uk', 'great britain', 'england', 'scotland', 'wales',
+    'australia', 'new zealand', 'india', 'singapore', 'japan', 'china', 'hong kong',
+    'brazil', 'mexico', 'argentina', 'chile', 'colombia', 'south africa', 'nigeria', 'kenya',
+    'israel', 'turkey', 'ukraine', 'switzerland', 'norway', 'iceland', 'serbia',
+    'united arab emirates', 'uae', 'philippines', 'indonesia', 'vietnam', 'thailand',
+    'south korea', 'korea', 'taiwan', 'pakistan', 'bangladesh', 'egypt', 'morocco',
+  ].map((name) => name.toLowerCase()),
+);
+
+export type EuVerdict = 'eu' | 'non-eu' | 'unrecognized';
+
+/**
+ * Classifies one declared location name.
+ *
+ * `unrecognized` is a real answer, not a failure: `Worldwide`, `EMEA` and
+ * `Remote` are all things publishers actually write, and none of them
+ * settles EU eligibility.
+ */
+export function classifyLocationName(name: string): EuVerdict {
+  const normalized = name.trim().toLowerCase();
+  if (EU_NAMES.has(normalized)) return 'eu';
+  if (NON_EU_NAMES.has(normalized)) return 'non-eu';
+  return 'unrecognized';
+}
+
+/** Country names out of `applicantLocationRequirements`, which may be one object, an array, or a bare string. */
+function applicantCountries(value: unknown): string[] {
+  const names: string[] = [];
+  for (const entry of Array.isArray(value) ? value : [value]) {
+    if (typeof entry === 'string') {
+      const name = clean(entry);
+      if (name) names.push(name);
+      continue;
+    }
+    if (!isRecord(entry)) continue;
+    const name = clean(entry.name);
+    if (name) names.push(name);
+  }
+  return names;
 }
 
 function clean(value: unknown): string | null {
@@ -179,6 +257,8 @@ export function findJobPostingLd(html: string): JobPostingLd | null {
         title: clean(node.title),
         companyName: org.name,
         companyUrl: org.url,
+        jobLocationType: clean(node.jobLocationType),
+        applicantCountries: applicantCountries(node.applicantLocationRequirements),
       };
     }
   }

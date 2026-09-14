@@ -23,6 +23,8 @@ import {
   missingFields,
   prefillCompanyStructural,
   prefillRoleStructural,
+  prefillRoleResearch,
+  ROLE_RESEARCH_FIELDS,
   ROLE_STRUCTURAL_FIELDS,
 } from '../../derive/structural.js';
 import { runTrackedExtraction } from '../../enrichment/tracked-extraction.js';
@@ -35,7 +37,8 @@ import {
   roleResearchPayload,
 } from '../../domain/enrichment-payload.js';
 import { isHttpUrl } from '../../lib/is-http-url.js';
-import { readSnapshotHtml, readSnapshotText, snapshotPage } from '../../pages/store.js';
+import { getLatestSuccessfulSnapshot } from '../../db/repositories/page-snapshots.js';
+import { hashUrl, readSnapshotHtml, readSnapshotText, snapshotPage } from '../../pages/store.js';
 
 const structuralScript = fileURLToPath(new URL('../../enrichment/scripts/extract-structural.sh', import.meta.url));
 const researchWebScript = fileURLToPath(new URL('../../enrichment/scripts/research-web.sh', import.meta.url));
@@ -210,7 +213,16 @@ async function handleRoleStructural(
   // whether to resolve a company; re-read fresh right before that check.
   const snapshot = await snapshotPage(db, role.url, { kind: 'role', force });
   const text = readSnapshotText(snapshot);
-  const key = { sourceKey: snapshot.text_hash!, recipeVersion: structuralRecipeVersion('role') };
+  // The prefill is folded into the key for the same reason as in
+  // handleRoleResearch: `deriveText` strips `<script>`, so a page that
+  // later adds or corrects its JSON-LD changes no `text_hash` and would
+  // never be re-derived. Keyed on the prefill *result*, so a changed
+  // analytics snippet still churns nothing.
+  const structuralPrefill = prefillRoleStructural(readSnapshotHtml(snapshot));
+  const key = {
+    sourceKey: sha256(`${snapshot.text_hash!}\n${JSON.stringify(structuralPrefill)}`),
+    recipeVersion: structuralRecipeVersion('role'),
+  };
 
   // See handleCompanyStructural on why `force` bypasses the freshness skip.
   if (!force && skipIfFresh(db, 'role', roleId, 'role_structural', key)) {
@@ -219,7 +231,7 @@ async function handleRoleStructural(
     return;
   }
 
-  const prefill = prefillRoleStructural(readSnapshotHtml(snapshot));
+  const prefill = structuralPrefill;
   const wanted = missingFields(ROLE_STRUCTURAL_FIELDS, prefill);
   // See the note in handleCompanyStructural on the empty-`wanted` branch.
   const result = wanted.length
@@ -359,6 +371,25 @@ function normalizeRemoteEu(value: string | null | undefined): 'yes' | 'no' | 'un
 // fetch's pattern) is a reasonable future addition once a real template
 // exists, but building it against a hypothetical is premature — nothing
 // supplies one yet.
+/**
+ * The posting's own declaration, from the snapshot the structural pass took.
+ *
+ * Every failure degrades to "declared nothing" rather than throwing: the
+ * snapshot row can outlive its file (a hand-cleared `.data/pages`, which
+ * `snapshotPage` guards for exactly this reason), and this runs *before*
+ * `skipIfFresh` — so an exception here would permanently fail research for
+ * that role through every retry, including roles already fully researched.
+ */
+function readRoleResearchPrefill(db: Database.Database, url: string): { remoteEu: 'yes' | 'no' | null } {
+  try {
+    const snapshot = getLatestSuccessfulSnapshot(db, hashUrl(url));
+    if (!snapshot?.html_path) return { remoteEu: null };
+    return prefillRoleResearch(readSnapshotHtml(snapshot));
+  } catch {
+    return { remoteEu: null };
+  }
+}
+
 async function handleRoleResearch(db: Database.Database, roleId: number, jobId: number): Promise<void> {
   const role = getRoleById(db, roleId);
   if (!role) throw new Error(`Role #${roleId} not found`);
@@ -366,17 +397,31 @@ async function handleRoleResearch(db: Database.Database, roleId: number, jobId: 
   const recipe = getSourceRecipe('role_research');
   const context = buildRoleResearchContext(db, role);
 
-  // These kinds read no page, so their input is the context JSON itself —
-  // hashing the exact string piped in means the key changes when, and only
-  // when, what the model saw changed.
-  const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion() };
+  // What the posting declares about itself, from the snapshot the
+  // structural pass already took — a publisher's own
+  // `applicantLocationRequirements` beats a web search's inference, and
+  // costs nothing.
+  const prefill = readRoleResearchPrefill(db, role.url);
+  const wanted = missingFields(ROLE_RESEARCH_FIELDS, prefill);
+
+  // The key covers the context *and the prefill*. Keying on the context
+  // alone would mean a posting that later corrects its
+  // `applicantLocationRequirements` is never picked up: `deriveText` strips
+  // `<script>`, so a JSON-LD-only edit changes neither `text_hash` nor the
+  // context, and both derivations would skip forever. Keying on the prefill
+  // *result* rather than the raw HTML is what keeps a changed analytics
+  // snippet from churning everything.
+  const key = {
+    sourceKey: contextKey(`${context}\n${JSON.stringify(prefill)}`),
+    recipeVersion: researchRecipeVersion('role'),
+  };
   if (skipIfFresh(db, 'role', roleId, 'role_research', key)) return;
 
   const { data, usage } = await runTrackedExtraction(
     db,
     { entityType: 'role', entityId: roleId, kind: 'role_research', jobId },
     researchWebScript,
-    ['role', recipe.instructions],
+    ['role', recipe.instructions, wanted.join(',')],
     context,
   );
   const extraction = data as RoleResearchExtraction;
@@ -389,14 +434,17 @@ async function handleRoleResearch(db: Database.Database, roleId: number, jobId: 
       salaryMin,
       salaryMax,
       equity: extraction.equity ?? null,
-      remoteEu: normalizeRemoteEu(extraction.remoteEu),
+      // The declaration wins where there is one: the model was not even
+      // asked (remoteEu is absent from `wanted`), so its answer here is
+      // undefined and normalizeRemoteEu would store null.
+      remoteEu: prefill.remoteEu ?? normalizeRemoteEu(extraction.remoteEu),
     });
 
     recordEvent(db, {
       entityType: 'role',
       entityId: roleId,
       type: 'role.research_completed',
-      context: { salaryMin, salaryMax, remoteEu: normalizeRemoteEu(extraction.remoteEu) },
+      context: { salaryMin, salaryMax, remoteEu: prefill.remoteEu ?? normalizeRemoteEu(extraction.remoteEu), modelFields: wanted },
     });
 
     recordDerivation(db, { entityType: 'role', entityId: roleId, kind: 'role_research', key, usage, jobId });
@@ -411,7 +459,7 @@ async function handleCompanyResearch(db: Database.Database, companyId: number, j
   const recipe = getSourceRecipe('company_research');
   const context = buildCompanyResearchContext(company);
 
-  const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion() };
+  const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion('company') };
   if (skipIfFresh(db, 'company', companyId, 'company_research', key)) return;
 
   const { data, usage } = await runTrackedExtraction(

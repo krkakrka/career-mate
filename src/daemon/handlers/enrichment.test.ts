@@ -241,3 +241,107 @@ describe('derivation atomicity', () => {
     }
   }, 60_000);
 });
+
+describe('role research prefill (JSON-LD location)', () => {
+  /** A posting that declares its own remote/EU eligibility, as live Ashby postings do. */
+  function researchPage(location: Record<string, unknown>): string {
+    const ld = JSON.stringify({
+      '@context': 'https://schema.org/',
+      '@type': 'JobPosting',
+      title: 'Staff Platform Engineer',
+      hiringOrganization: { '@type': 'Organization', name: 'Initech', sameAs: 'https://initech.example.com' },
+      ...location,
+    });
+    return `<html><head><script type="application/ld+json">${ld}</script></head><body><h1>Engineer</h1></body></html>`;
+  }
+
+  function researchModelFields(roleId: number): string[] {
+    const event = listEventsForEntity(db, 'role', roleId).find((e) => e.type === 'role.research_completed');
+    return (JSON.parse(event!.context!) as { modelFields: string[] }).modelFields;
+  }
+
+  it('prefers the posting\'s own declaration over the model, and does not pay to ask', async () => {
+    // The fake records the argv it was handed, so "the model was not asked"
+    // can be asserted against the real invocation rather than against our
+    // own bookkeeping — reverting the subset must fail this test.
+    const callLog = path.join(tempDir, 'calls.log');
+    process.env.CM_FAKE_CLAUDE_LOG = callLog;
+
+    const server = await startFixtureServer({
+      '/jobs/1': researchPage({
+        jobLocationType: 'TELECOMMUTE',
+        applicantLocationRequirements: [{ '@type': 'Country', name: 'Canada' }, { '@type': 'Country', name: 'United States' }],
+      }),
+    });
+
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/1` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      // The offline fake answers remoteEu 'yes' for every posting, so a
+      // stored 'no' can only have come from the declaration — which is what
+      // makes this test discriminate rather than merely pass.
+      expect(getRoleById(db, role.id)!.remote_eu).toBe('no');
+      expect(researchModelFields(role.id)).toEqual(['salaryMin', 'salaryMax', 'equity']);
+
+      // The prompt that actually went out asked for three fields, not four.
+      const research = fs
+        .readFileSync(callLog, 'utf-8')
+        .split('\n')
+        .find((line) => line.includes('salaryMin'));
+      expect(research).toBeDefined();
+      expect(research).not.toContain('remoteEu');
+    } finally {
+      delete process.env.CM_FAKE_CLAUDE_LOG;
+      await server.close();
+    }
+  }, 60_000);
+
+  it('picks up a declaration the posting adds later, which text_hash cannot see', async () => {
+    let declared = false;
+    const server = await startFixtureServer({
+      '/jobs/3': () =>
+        declared
+          ? researchPage({ jobLocationType: 'TELECOMMUTE', applicantLocationRequirements: { name: 'European Union' } })
+          : researchPage({}),
+    });
+
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/3` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+      expect(getRoleById(db, role.id)!.remote_eu).toBe('yes'); // the fake's answer
+
+      // The posting now declares EU eligibility. deriveText strips
+      // <script>, so text_hash is unchanged and the research context is
+      // unchanged — keyed on those alone, this correction would never be
+      // picked up. The key covers the prefill result for exactly this.
+      declared = true;
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id, force: true }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      const events = listEventsForEntity(db, 'role', role.id).filter((e) => e.type === 'role.research_completed');
+      expect(events.length).toBe(2); // it did not skip as fresh
+      expect(JSON.parse(events[1]!.context!).modelFields).toEqual(['salaryMin', 'salaryMax', 'equity']);
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+
+  it('still asks the model when the posting declares nothing about location', async () => {
+    const server = await startFixtureServer({ '/jobs/2': researchPage({}) });
+
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/2` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-research', roleId: role.id }));
+
+      // Falls back to the model's answer, and remoteEu is back in the ask.
+      expect(getRoleById(db, role.id)!.remote_eu).toBe('yes');
+      expect(researchModelFields(role.id)).toContain('remoteEu');
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+});

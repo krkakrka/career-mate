@@ -58,12 +58,28 @@ describe('researchRecipeVersion', () => {
     // much part of the recipe as the script. Without this, editing an
     // instruction leaves every existing research derivation looking fresh
     // and the edited prompt never runs for anything already researched.
-    const before = researchRecipeVersion();
+    const before = researchRecipeVersion('role');
     temporarilyAppend(sourcesPath, '\n');
-    expect(researchRecipeVersion()).not.toBe(before);
+    expect(researchRecipeVersion('role')).not.toBe(before);
   });
 
   it('is stable across calls when nothing changed', () => {
-    expect(researchRecipeVersion()).toBe(researchRecipeVersion());
+    expect(researchRecipeVersion('role')).toBe(researchRecipeVersion('role'));
+  });
+});
+
+describe('researchRecipeVersion', () => {
+  it('differs per entity kind, so a role-only rule change cannot invalidate company research', () => {
+    // The same lesson as structuralRecipeVersion: one shared constant meant
+    // a role change marked every tracked company stale and paid to redo it.
+    expect(researchRecipeVersion('role')).not.toBe(researchRecipeVersion('company'));
+  });
+
+  it('still changes for both when the shared script or instructions change', () => {
+    const beforeRole = researchRecipeVersion('role');
+    const beforeCompany = researchRecipeVersion('company');
+    temporarilyAppend(sourcesPath, '\n');
+    expect(researchRecipeVersion('role')).not.toBe(beforeRole);
+    expect(researchRecipeVersion('company')).not.toBe(beforeCompany);
   });
 });

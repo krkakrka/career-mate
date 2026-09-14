@@ -26,6 +26,8 @@ describe('findJobPostingLd', () => {
       title: 'Software Engineer, Agents & Automations',
       companyName: 'Cohere',
       companyUrl: 'https://cohere.com/',
+      jobLocationType: null,
+      applicantCountries: [],
     });
   });
 
@@ -86,7 +88,13 @@ describe('findJobPostingLd', () => {
 
   it('nulls individual fields it cannot read, keeping the ones it can', () => {
     const html = page(JSON.stringify({ '@type': 'JobPosting', title: '  Senior Engineer  ' }));
-    expect(findJobPostingLd(html)).toEqual({ title: 'Senior Engineer', companyName: null, companyUrl: null });
+    expect(findJobPostingLd(html)).toEqual({
+      title: 'Senior Engineer',
+      companyName: null,
+      companyUrl: null,
+      jobLocationType: null,
+      applicantCountries: [],
+    });
   });
 
   it('ignores blank and non-string values', () => {
@@ -97,7 +105,13 @@ describe('findJobPostingLd', () => {
         hiringOrganization: { name: 42, sameAs: '' },
       }),
     );
-    expect(findJobPostingLd(html)).toEqual({ title: null, companyName: null, companyUrl: null });
+    expect(findJobPostingLd(html)).toEqual({
+      title: null,
+      companyName: null,
+      companyUrl: null,
+      jobLocationType: null,
+      applicantCountries: [],
+    });
   });
 
   it('handles hiringOrganization given as an array or a bare string', () => {
@@ -126,6 +140,8 @@ describe('findJobPostingLd', () => {
       title: 'Analytics Engineer',
       companyName: 'Metabase',
       companyUrl: null,
+      jobLocationType: null,
+      applicantCountries: [],
     });
   });
 

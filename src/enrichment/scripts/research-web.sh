@@ -38,25 +38,61 @@ BUDGET="${CM_MAX_BUDGET_USD:-0.50}"
 
 KIND="${1:-}"
 INSTRUCTIONS="${2:-}"
+# Optional comma-separated subset, like extract-structural.sh: the caller
+# passes only the fields no deterministic rule could fill, so a posting that
+# declares its own remote/EU eligibility is not asked about it.
+FIELDS="${3:-}"
 CONTEXT=$(cat)
 
 case "$KIND" in
   role)
-    SCHEMA='{"salaryMin": number|null, "salaryMax": number|null, "equity": string|null, "remoteEu": "yes"|"no"|"unknown"}'
+    ALL_FIELDS="salaryMin,salaryMax,equity,remoteEu"
     ;;
   company)
-    SCHEMA='{"ipoStatus": string|null, "aiProofScore": number|null, "aiProofNotes": string|null}'
+    ALL_FIELDS="ipoStatus,aiProofScore,aiProofNotes"
     ;;
   *)
-    echo "usage: research-web.sh <role|company> <instructions>  (context piped via stdin)" >&2
+    echo "usage: research-web.sh <role|company> <instructions> [fields]  (context piped via stdin)" >&2
     exit 1
     ;;
 esac
+
+[ -z "$FIELDS" ] && FIELDS="$ALL_FIELDS"
+
+field_shape() {
+  case "$1" in
+    salaryMin) echo '"salaryMin": number|null' ;;
+    salaryMax) echo '"salaryMax": number|null' ;;
+    equity) echo '"equity": string|null' ;;
+    remoteEu) echo '"remoteEu": "yes"|"no"|"unknown"' ;;
+    ipoStatus) echo '"ipoStatus": string|null' ;;
+    aiProofScore) echo '"aiProofScore": number|null' ;;
+    aiProofNotes) echo '"aiProofNotes": string|null' ;;
+    *) echo "unknown field: $1" >&2; exit 1 ;;
+  esac
+}
+
+SCHEMA=""
+IFS=','
+for FIELD in $FIELDS; do
+  [ -z "$FIELD" ] && continue
+  [ -n "$SCHEMA" ] && SCHEMA="${SCHEMA}, "
+  SCHEMA="${SCHEMA}$(field_shape "$FIELD")"
+done
+unset IFS
+
+if [ -z "$SCHEMA" ]; then
+  echo "research-web.sh: no fields requested" >&2
+  exit 1
+fi
+SCHEMA="{${SCHEMA}}"
 
 PROMPT=$(cat <<EOF
 ${INSTRUCTIONS}
 
 Context (JSON): ${CONTEXT}
+
+Research ONLY the fields present in the response shape below. The instructions above may mention fields that are not in it — those have already been answered from the posting's own structured data, so do not spend searches on them.
 
 Respond with ONLY a JSON object, no markdown fence, no commentary, matching this shape exactly: ${SCHEMA}
 Use null for any field you cannot confidently determine from real sources you found. For aiProofScore, use a number from 0 (highly automatable / at risk) to 1 (durably needs human judgment or skill).

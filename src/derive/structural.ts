@@ -1,5 +1,5 @@
 import { extractOgMeta } from '../pages/text.js';
-import { findJobPostingLd } from './jsonld.js';
+import { classifyLocationName, findJobPostingLd } from './jsonld.js';
 
 /**
  * Fields the structural extraction can produce for each entity kind. The
@@ -25,10 +25,22 @@ import { findJobPostingLd } from './jsonld.js';
  * entity costs real money. The version is the claim "the rules changed".
  */
 export const ROLE_PREFILL_RULES_VERSION = 2;
+
+/**
+ * Bump when the deterministic rules feeding `role_research` change.
+ *
+ * Separate from the structural versions for the same reason those are
+ * separate from each other: a change here must not mark every company's
+ * research derivation stale and pay to redo it.
+ */
+export const ROLE_RESEARCH_PREFILL_RULES_VERSION = 1;
 export const COMPANY_PREFILL_RULES_VERSION = 1;
 
 export const ROLE_STRUCTURAL_FIELDS = ['title', 'description', 'companyName', 'companyUrl'] as const;
 export const COMPANY_STRUCTURAL_FIELDS = ['name', 'description'] as const;
+
+/** The fields `research-web.sh role` can be asked for, in the order it describes them. */
+export const ROLE_RESEARCH_FIELDS = ['salaryMin', 'salaryMax', 'equity', 'remoteEu'] as const;
 
 export type RoleStructuralField = (typeof ROLE_STRUCTURAL_FIELDS)[number];
 export type CompanyStructuralField = (typeof COMPANY_STRUCTURAL_FIELDS)[number];
@@ -100,4 +112,43 @@ export function missingFields<Field extends string>(
   known: Partial<Record<Field, string | null>>,
 ): Field[] {
   return allFields.filter((field) => known[field] == null);
+}
+
+/**
+ * What a posting's own `JobPosting` declaration settles about remote/EU
+ * eligibility, for free and from the publisher rather than a guess.
+ *
+ * Deliberately conservative: this field feeds `remoteEuMatchTerm` in the
+ * priority score, so a wrong `no` quietly pushes a good role down the list
+ * and a wrong `yes` pulls a bad one up — and unlike a wrong title, nothing
+ * downstream reads it back and notices. Every case that is not
+ * unambiguous returns `null`, which leaves the question to the model
+ * exactly as before.
+ *
+ * The rules, all requiring `jobLocationType: TELECOMMUTE` — "remote_eu"
+ * means remote *and* EU-eligible, so an onsite role in Berlin is not a
+ * `yes` however European it is:
+ *
+ * - TELECOMMUTE + an EU name among the applicant requirements → `yes`
+ * - TELECOMMUTE + requirements that are *all recognisably* non-EU → `no`
+ * - TELECOMMUTE + any name we cannot classify → `null`. `Worldwide`,
+ *   `Anywhere` and `EMEA` are all things publishers write, and none of
+ *   them settles EU eligibility; treating an unrecognised name as non-EU
+ *   scored a remote-worldwide role *below* an unresearched one, and
+ *   permanently, since the model was then never asked.
+ * - TELECOMMUTE with no requirements declared → `null` (remote, but from
+ *   where is genuinely unstated)
+ * - no TELECOMMUTE → `null`, *not* `no`: schema.org only defines the
+ *   property for telecommute roles, so its absence is silence rather than
+ *   a denial, and plenty of remote postings simply omit it.
+ */
+export function prefillRoleResearch(html: string): { remoteEu: 'yes' | 'no' | null } {
+  const posting = findJobPostingLd(html);
+  if (!posting || posting.jobLocationType?.toUpperCase() !== 'TELECOMMUTE') return { remoteEu: null };
+  if (posting.applicantCountries.length === 0) return { remoteEu: null };
+
+  const verdicts = posting.applicantCountries.map(classifyLocationName);
+  if (verdicts.includes('eu')) return { remoteEu: 'yes' };
+  // Only say no when every name was understood.
+  return { remoteEu: verdicts.every((verdict) => verdict === 'non-eu') ? 'no' : null };
 }

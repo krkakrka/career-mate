@@ -4,7 +4,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../client.js';
-import { claimNextJob, completeJob, enqueueJob, failJob, getJobById } from './jobs.js';
+import { claimNextJob, completeJob, enqueueJob, failJob, getJobById, requeueStaleRunningJobs } from './jobs.js';
 import { listOperationalLogs } from './operational-logs.js';
 
 let tempDir: string;
@@ -119,5 +119,54 @@ describe('duration under a concurrent re-claim', () => {
     // with no duration at all.
     expect(getJobById(db, job.id)!.status).toBe('pending');
     expect(getJobById(db, job.id)!.duration_ms).toBeGreaterThanOrEqual(3000);
+  });
+});
+
+describe('the claim guard', () => {
+  it('will not let a superseded worker fail a job another one now owns', () => {
+    const job = enqueueJob(db, { topic: 'notification', payload: {} });
+    claimNextJob(db, 'notification');
+    const staleClaim = claimedAgo(job.id, 35 * 60 * 1000);
+
+    // Second worker takes it over.
+    db.prepare("UPDATE jobs SET claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(job.id);
+
+    failJob(db, job.id, 'boom', { maxAttempts: 3, claimedAt: staleClaim });
+
+    // Marking it pending here would make it claimable by a *third* worker
+    // while the second is still running it, and the second's completion
+    // would then be swallowed by completeJob's guard.
+    expect(getJobById(db, job.id)!.status).toBe('running');
+  });
+
+  it('records a superseded completion as skipped, not as a success', () => {
+    const job = enqueueJob(db, { topic: 'notification', payload: {} });
+    claimNextJob(db, 'notification');
+    const staleClaim = claimedAgo(job.id, 60_000);
+    db.prepare("UPDATE jobs SET claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(job.id);
+
+    completeJob(db, job.id, staleClaim);
+
+    // operational_logs is what both surfaces are measured from; a
+    // completion that never happened must not appear there as one.
+    const completions = listOperationalLogs(db, { action: 'complete' });
+    expect(completions[0]!.outcome).toBe('skipped');
+  });
+
+  it('leaves a requeued-pending job with no duration', () => {
+    const job = enqueueJob(db, { topic: 'notification', payload: {} });
+    claimNextJob(db, 'notification');
+    claimedAgo(job.id, 90 * 60 * 1000);
+    db.prepare('UPDATE jobs SET updated_at = ? WHERE id = ?').run(
+      new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+      job.id,
+    );
+
+    requeueStaleRunningJobs(db, 30);
+
+    // "Null while pending or running" — otherwise a job that has not run
+    // yet shows up in cm status's slowest-actions panel.
+    expect(getJobById(db, job.id)!.status).toBe('pending');
+    expect(getJobById(db, job.id)!.duration_ms).toBeNull();
   });
 });
