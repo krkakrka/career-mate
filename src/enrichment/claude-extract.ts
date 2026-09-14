@@ -4,6 +4,7 @@ import path from 'node:path';
 import { loadSettings } from '../config/settings.js';
 import { sanitizeOperationalValue } from '../db/repositories/operational-logs.js';
 import { getDataDir } from '../lib/paths.js';
+import { captureExtractionFailure } from './extraction-capture.js';
 
 /** Enough of a failure to diagnose it, bounded so a runaway stderr can't land in the job's error column. */
 const STDERR_TAIL_LENGTH = 300;
@@ -278,18 +279,27 @@ function stripMarkdownFence(text: string): string {
 }
 
 /**
- * Runs a claude -p extraction script and returns the model's answer parsed
- * as JSON. Handles the double-JSON shape of `--output-format json`: the
- * outer envelope wraps claude's own text response, which is itself
- * (usually) a JSON string.
+ * Re-runs an extraction script and returns the *raw* stdout, unparsed.
+ *
+ * The replay harness (`cm debug replay-extraction`) needs the exact bytes
+ * the model returned so it can show the garbage and decide, across repeats,
+ * whether it is deterministic. `runExtraction` throws that away the moment
+ * parsing fails, which is precisely the case being investigated — so this
+ * exposes the pre-parse output.
  */
-export async function runExtraction(
-  scriptPath: string,
-  args: string[],
-  stdinContent: string,
-): Promise<ExtractionResult> {
-  const stdout = await runScript(scriptPath, args, stdinContent);
+export function runExtractionRaw(scriptPath: string, args: string[], stdinContent: string): Promise<string> {
+  return runScript(scriptPath, args, stdinContent);
+}
 
+/**
+ * Parses the raw stdout of a claude -p `--output-format json` call into the
+ * model's answer. Pure — no subprocess, no I/O — so a captured failure
+ * bundle's `stdout` can be replayed straight through it in a unit test.
+ *
+ * Handles the double-JSON shape: the outer envelope wraps claude's own text
+ * response, which is itself (usually) a JSON string.
+ */
+export function parseExtractionOutput(stdout: string): ExtractionResult {
   let envelope: ClaudeResultEnvelope;
   try {
     envelope = JSON.parse(stdout) as ClaudeResultEnvelope;
@@ -319,4 +329,34 @@ export async function runExtraction(
   }
 
   return { data: parsed, usage };
+}
+
+/**
+ * Runs a claude -p extraction script and returns the model's answer parsed
+ * as JSON.
+ *
+ * On any failure, writes a replayable bundle — the exact `scriptPath`,
+ * `args`, `stdinContent` and raw `stdout` — when `CM_DEBUG_EXTRACTION` is
+ * set. That capture is the only place those inputs survive: the durable
+ * error column deliberately drops them (they carry untrusted page content),
+ * which is what left past failures impossible to reproduce. The bundle is a
+ * local, gitignored, opt-in channel, never durable storage.
+ */
+export async function runExtraction(
+  scriptPath: string,
+  args: string[],
+  stdinContent: string,
+): Promise<ExtractionResult> {
+  // `stdout` stays '' if runScript itself fails (non-zero exit, timeout):
+  // there is no parsed output to show, but the inputs are still worth
+  // capturing. A parse failure below runs with stdout fully populated —
+  // the case where the model's garbage is the thing to look at.
+  let stdout = '';
+  try {
+    stdout = await runScript(scriptPath, args, stdinContent);
+    return parseExtractionOutput(stdout);
+  } catch (error) {
+    captureExtractionFailure({ scriptPath, args, stdinContent, stdout, error });
+    throw error;
+  }
 }

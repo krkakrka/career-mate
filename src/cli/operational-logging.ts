@@ -11,13 +11,13 @@ import { tryRecordOperationalLog } from '../db/repositories/operational-logs.js'
  * dying on a three-minute network timeout is exactly the thing worth
  * measuring, and it recorded nothing.
  */
-let runningAction: { command: string; startedAt: number } | undefined;
+let runningAction: { command: string; startedAt: number; timed: boolean } | undefined;
 
-export function takeRunningAction(): { command: string; durationMs: number } | undefined {
+export function takeRunningAction(): { command: string; durationMs: number | null } | undefined {
   if (!runningAction) return undefined;
-  const { command, startedAt } = runningAction;
+  const { command, startedAt, timed } = runningAction;
   runningAction = undefined;
-  return { command, durationMs: Date.now() - startedAt };
+  return { command, durationMs: timed ? Date.now() - startedAt : null };
 }
 
 /**
@@ -55,7 +55,15 @@ export function installCliOperationalLogging(program: Command): void {
 
   program.hook('preAction', (_parent, actionCommand) => {
     startedAt.set(actionCommand, Date.now());
-    runningAction = { command: commandPath(actionCommand), startedAt: Date.now() };
+    // `timed: false` for a watch command, so the exclusion holds on the
+    // rejection path too — otherwise a `cm logs --follow` that dies with a
+    // DB error records the whole session, which is exactly the multi-hour
+    // row this suppression exists to keep out of the slowest-actions panel.
+    runningAction = {
+      command: commandPath(actionCommand),
+      startedAt: Date.now(),
+      timed: !isLongLivedInvocation(actionCommand),
+    };
     tryRecordOperationalLog(getDb(), {
       outcome: 'started', component: 'cli', action: commandPath(actionCommand),
     });

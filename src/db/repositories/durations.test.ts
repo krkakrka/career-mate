@@ -79,19 +79,33 @@ describe('job duration', () => {
 });
 
 describe('duration under a concurrent re-claim', () => {
-  it('reports this worker\'s own elapsed time, not the re-claimer\'s', () => {
+  it('reports this worker\'s own elapsed time, not whatever the row says now', () => {
     const job = enqueueJob(db, { topic: 'notification', payload: {} });
     claimNextJob(db, 'notification');
     const myClaim = claimedAgo(job.id, 35 * 60 * 1000);
 
-    // The stale sweep requeues it and another worker re-claims, re-stamping
-    // claimed_at — all while this worker is still running.
-    db.prepare("UPDATE jobs SET status = 'running', claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(job.id);
-
     completeJob(db, job.id, myClaim);
 
-    // Reading the row here would report ~0ms for 35 minutes of work.
+    // Measured from the claim this worker holds. Re-reading the row would
+    // be wrong the moment anything else re-stamps it.
     expect(getJobById(db, job.id)!.duration_ms).toBeGreaterThanOrEqual(35 * 60 * 1000);
+  });
+
+  it('will not let a superseded worker finish a job another one now owns', () => {
+    const job = enqueueJob(db, { topic: 'notification', payload: {} });
+    claimNextJob(db, 'notification');
+    const staleClaim = claimedAgo(job.id, 35 * 60 * 1000);
+
+    // The stale sweep requeues it and a second worker re-claims — all while
+    // the first worker is still inside its handler.
+    db.prepare("UPDATE jobs SET status = 'running', claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(job.id);
+
+    completeJob(db, job.id, staleClaim);
+
+    // Whoever still holds the claim owns the outcome: the first worker must
+    // not mark it done out from under the second, whose own completion
+    // would then overwrite it.
+    expect(getJobById(db, job.id)!.status).toBe('running');
   });
 
   it('records the duration of a retried attempt on the row, not only in the log', () => {

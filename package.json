@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "cm": "./bin/cm.js"
+    "cm": "./bin/cm.js",
+    "cm-mcp": "./bin/cm-mcp.js"
   },
   "scripts": {
     "test": "vitest run",

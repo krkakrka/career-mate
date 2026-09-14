@@ -13,6 +13,7 @@ import { registerWorkerCommand } from './commands/worker.js';
 import { registerEventsCommand } from './commands/events.js';
 import { registerLogsCommand } from './commands/logs.js';
 import { registerFunnelCommands } from './commands/funnel.js';
+import { registerDebugCommand } from './commands/debug.js';
 import { installCliOperationalLogging, takeRunningAction } from './operational-logging.js';
 
 const program = new Command();
@@ -36,6 +37,7 @@ registerWorkerCommand(program);
 registerEventsCommand(program);
 registerLogsCommand(program);
 registerFunnelCommands(program);
+registerDebugCommand(program);
 installCliOperationalLogging(program);
 
 try {

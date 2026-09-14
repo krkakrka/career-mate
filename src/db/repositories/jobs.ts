@@ -139,6 +139,9 @@ export function claimNextJob(db: Database.Database, topic: JobTopic): JobRecord 
     db.prepare(
       `UPDATE jobs SET status = 'running',
          claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         -- A new attempt has no duration yet; leaving the previous one
+         -- would contradict "null while pending or running".
+         duration_ms = NULL,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE id = ?`,
     ).run(candidate.id);
@@ -165,9 +168,15 @@ export function claimNextJob(db: Database.Database, topic: JobTopic): JobRecord 
 export function completeJob(db: Database.Database, id: number, claimedAt?: string | null): void {
   const job = getJobById(db, id);
   const durationMs = elapsedSinceClaim(claimedAt ?? job?.claimed_at);
+  // Guarded on the claim this worker holds: in the stale-requeue race
+  // (A runs long, the sweep requeues, B re-claims and is now running it)
+  // an unguarded write would let A mark the job done out from under B,
+  // and B's own completion would then overwrite A's. Whoever still holds
+  // the claim owns the outcome.
   db.prepare(
-    "UPDATE jobs SET status = 'done', duration_ms = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-  ).run(durationMs, id);
+    `UPDATE jobs SET status = 'done', duration_ms = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ? AND (claimed_at IS ? OR ? IS NULL)`,
+  ).run(durationMs, id, claimedAt ?? null, claimedAt ?? null);
   const entity = job ? entityOf(job) : undefined;
   tryRecordOperationalLog(db, {
     outcome: 'succeeded',
@@ -285,17 +294,21 @@ export function requeueStaleRunningJobs(
 ): number {
   const cutoff = new Date(Date.now() - Math.max(0, olderThanMinutes) * 60 * 1000).toISOString();
   const stale = db
-    .prepare("SELECT id, attempts FROM jobs WHERE status = 'running' AND updated_at <= ?")
-    .all(cutoff) as { id: number; attempts: number }[];
+    .prepare("SELECT id, attempts, claimed_at FROM jobs WHERE status = 'running' AND updated_at <= ?")
+    .all(cutoff) as { id: number; attempts: number; claimed_at: string | null }[];
 
   let requeued = 0;
   for (const job of stale) {
     const attempts = job.attempts + 1;
     const exhausted = attempts >= maxAttempts;
+    // This ends the abandoned attempt, so it records how long that attempt
+    // ran — the same invariant failJob keeps for every other terminal
+    // transition.
+    const durationMs = elapsedSinceClaim(job.claimed_at);
 
     const changed = db
       .prepare(
-        `UPDATE jobs SET status = ?, attempts = ?, error = ?, claimed_at = NULL,
+        `UPDATE jobs SET status = ?, attempts = ?, error = ?, claimed_at = NULL, duration_ms = ?,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ? AND status = 'running'`,
       )
@@ -303,6 +316,7 @@ export function requeueStaleRunningJobs(
         exhausted ? 'failed' : 'pending',
         attempts,
         'Left running by a daemon that stopped without completing it',
+        durationMs,
         job.id,
       ).changes;
     if (changed === 0) continue; // someone else got to it first
