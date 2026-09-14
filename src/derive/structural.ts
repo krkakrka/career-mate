@@ -1,4 +1,5 @@
 import { extractOgMeta } from '../pages/text.js';
+import { findJobPostingLd } from './jsonld.js';
 
 /**
  * Fields the structural extraction can produce for each entity kind. The
@@ -6,6 +7,12 @@ import { extractOgMeta } from '../pages/text.js';
  */
 /**
  * Bump when the deterministic prefill rules below change what they produce.
+ *
+ * Split per entity kind. A single shared constant meant that adding a role
+ * rule also marked every tracked *company* structural derivation stale —
+ * ~90 of them here — for a `prefillCompanyStructural` that had not changed
+ * by a byte, which is precisely the paid-for-nothing re-extraction the
+ * hand-maintained-version approach exists to avoid.
  *
  * These rules are half the structural recipe (the free pass that runs before
  * the model), so a change to them must invalidate the values they produced —
@@ -17,7 +24,8 @@ import { extractOgMeta } from '../pages/text.js';
  * fire on a comment or an unrelated refactor, and re-extracting every tracked
  * entity costs real money. The version is the claim "the rules changed".
  */
-export const PREFILL_RULES_VERSION = 1;
+export const ROLE_PREFILL_RULES_VERSION = 2;
+export const COMPANY_PREFILL_RULES_VERSION = 1;
 
 export const ROLE_STRUCTURAL_FIELDS = ['title', 'description', 'companyName', 'companyUrl'] as const;
 export const COMPANY_STRUCTURAL_FIELDS = ['name', 'description'] as const;
@@ -38,22 +46,39 @@ function og(html: string, property: string): string | undefined {
 /**
  * What a role page's own metadata already tells us, for free.
  *
- * Deliberately nothing — including `title`, which the original plan for
- * this step proposed taking from `<title>`/`og:title`. On the ATSes that
- * host most postings, both are boilerplate-wrapped rather than the title:
- * Greenhouse serves "Job Application for Senior Backend Engineer at Acme",
- * Lever "Acme - Senior Backend Engineer", Ashby "Senior Backend Engineer @
- * Acme". Writing those into `roles.title` would pollute the notification
- * label and the role-research prompt context, and it buys nothing: the
- * same values are already in the header block of the text the model reads,
- * and the model unwraps them correctly. A deterministic rule is only worth
- * having where it is *more* reliable than the model, not merely cheaper.
+ * Read from schema.org JSON-LD (`JobPosting`) where the board declares one
+ * — the publisher stating the fields outright rather than a model inferring
+ * them from prose. That is the bar CLAUDE.md sets: more reliable than the
+ * model, not merely cheaper. Coverage varies by board and is often partial
+ * (Ashby declares all three, Lever omits the company URL, Greenhouse
+ * declares nothing); see `jsonld.ts` for what was measured.
  *
- * The function stays as the place a sound rule would go — JSON-LD
- * `JobPosting.title` is the obvious candidate and is in the Backlog.
+ * Deliberately still nothing from `<title>`/`og:title`. Step 16 proposed
+ * taking the title from there and review showed the source is unsound: on
+ * the ATSes hosting most postings both are boilerplate-wrapped rather than
+ * the title ("Job Application for Senior Backend Engineer at Acme" on
+ * Greenhouse, "Acme - Senior Backend Engineer" on Lever, "Senior Backend
+ * Engineer @ Acme" on Ashby). A page with no JSON-LD still goes to the
+ * model, which unwraps those correctly from the derived text.
+ *
+ * `companyUrl` matters more than it looks: it is what `resolveRoleCompany`
+ * keys on, and `hiringOrganization.sameAs` is the company's own declared
+ * URL rather than the model's best guess at one.
+ *
+ * `description` is not prefilled even though JSON-LD has a field by that
+ * name — see the note in `jsonld.ts`. The two are different values.
  */
-export function prefillRoleStructural(_html: string): { title: string | null } {
-  return { title: null };
+export function prefillRoleStructural(html: string): {
+  title: string | null;
+  companyName: string | null;
+  companyUrl: string | null;
+} {
+  const posting = findJobPostingLd(html);
+  return {
+    title: posting?.title ?? null,
+    companyName: posting?.companyName ?? null,
+    companyUrl: posting?.companyUrl ?? null,
+  };
 }
 
 /**

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { combinedRecipeVersion } from './keys.js';
 import { researchRecipeVersion, structuralRecipeVersion } from './recipes.js';
-import { PREFILL_RULES_VERSION } from './structural.js';
+import { COMPANY_PREFILL_RULES_VERSION, ROLE_PREFILL_RULES_VERSION } from './structural.js';
 
 const sourcesPath = fileURLToPath(new URL('../enrichment/sources.json', import.meta.url));
 const structuralScript = fileURLToPath(new URL('../enrichment/scripts/extract-structural.sh', import.meta.url));
@@ -25,9 +25,9 @@ function temporarilyAppend(filePath: string, text: string): void {
 
 describe('structuralRecipeVersion', () => {
   it('changes when the extraction prompt changes', () => {
-    const before = structuralRecipeVersion();
+    const before = structuralRecipeVersion('role');
     temporarilyAppend(structuralScript, '\n# a prompt edit\n');
-    expect(structuralRecipeVersion()).not.toBe(before);
+    expect(structuralRecipeVersion('role')).not.toBe(before);
   });
 
   it('covers the deterministic prefill rules, not only the script', () => {
@@ -35,10 +35,20 @@ describe('structuralRecipeVersion', () => {
     // changing it has to invalidate what it produced — otherwise a new rule
     // (JSON-LD title, say) would apply only to entities added afterwards.
     // Demonstrated by the hash differing from the script's hash alone.
-    expect(structuralRecipeVersion()).not.toBe(combinedRecipeVersion([structuralScript]));
-    expect(structuralRecipeVersion()).toBe(
-      combinedRecipeVersion([structuralScript], [`prefill-rules@${PREFILL_RULES_VERSION}`]),
+    expect(structuralRecipeVersion('role')).not.toBe(combinedRecipeVersion([structuralScript]));
+    expect(structuralRecipeVersion('role')).toBe(
+      combinedRecipeVersion([structuralScript], [`role-prefill-rules@${ROLE_PREFILL_RULES_VERSION}`]),
     );
+    expect(structuralRecipeVersion('company')).toBe(
+      combinedRecipeVersion([structuralScript], [`company-prefill-rules@${COMPANY_PREFILL_RULES_VERSION}`]),
+    );
+  });
+
+  it('keeps the two entity kinds independent', () => {
+    // A shared constant meant a role-only rule change also marked every
+    // tracked company stale and paid to re-extract it, for a
+    // prefillCompanyStructural that had not changed by a byte.
+    expect(structuralRecipeVersion('role')).not.toBe(structuralRecipeVersion('company'));
   });
 });
 

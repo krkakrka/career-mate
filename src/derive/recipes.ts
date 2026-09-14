@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { PREFILL_RULES_VERSION } from './structural.js';
+import { COMPANY_PREFILL_RULES_VERSION, ROLE_PREFILL_RULES_VERSION } from './structural.js';
 import { sourcesPath } from '../enrichment/sources.js';
 import { combinedRecipeVersion } from './keys.js';
 
@@ -16,9 +16,16 @@ const researchWebScript = fileURLToPath(new URL('../enrichment/scripts/research-
  * forever — so neither computes them itself.
  */
 
-/** The free prefill rules, then the extraction prompt. */
-export function structuralRecipeVersion(): string {
-  return combinedRecipeVersion([structuralScript], [`prefill-rules@${PREFILL_RULES_VERSION}`]);
+/**
+ * The free prefill rules, then the extraction prompt.
+ *
+ * Per entity kind: the two share the extraction script but not the prefill
+ * rules, and folding one version in for both means a change to either marks
+ * every entity of *both* kinds stale and pays to re-extract them.
+ */
+export function structuralRecipeVersion(entity: 'role' | 'company'): string {
+  const prefill = entity === 'role' ? ROLE_PREFILL_RULES_VERSION : COMPANY_PREFILL_RULES_VERSION;
+  return combinedRecipeVersion([structuralScript], [`${entity}-prefill-rules@${prefill}`]);
 }
 
 /** The research prompt wrapper, plus the per-source `instructions` it wraps. */

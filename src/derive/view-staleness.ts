@@ -28,12 +28,17 @@ import { isStale, type StalenessReason } from './staleness.js';
  * settings out of the loop to avoid.
  */
 export interface RecipeVersions {
-  structural: string;
+  roleStructural: string;
+  companyStructural: string;
   research: string;
 }
 
 export function currentRecipeVersions(): RecipeVersions {
-  return { structural: structuralRecipeVersion(), research: researchRecipeVersion() };
+  return {
+    roleStructural: structuralRecipeVersion('role'),
+    companyStructural: structuralRecipeVersion('company'),
+    research: researchRecipeVersion(),
+  };
 }
 
 export interface FieldGroupStatus {
@@ -92,7 +97,7 @@ export function companyFieldGroupStatus(
   recipes: RecipeVersions = currentRecipeVersions(),
 ): FieldGroupStatus[] {
   return [
-    statusFor(db, 'company', company.id, 'company_structural', pageKey(db, company.url, recipes.structural)),
+    statusFor(db, 'company', company.id, 'company_structural', pageKey(db, company.url, recipes.companyStructural)),
     statusFor(db, 'company', company.id, 'company_research', {
       sourceKey: contextKey(buildCompanyResearchContext(company)),
       recipeVersion: recipes.research,
@@ -106,7 +111,7 @@ export function roleFieldGroupStatus(
   recipes: RecipeVersions = currentRecipeVersions(),
 ): FieldGroupStatus[] {
   return [
-    statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url, recipes.structural)),
+    statusFor(db, 'role', role.id, 'role_structural', pageKey(db, role.url, recipes.roleStructural)),
     statusFor(db, 'role', role.id, 'role_research', {
       sourceKey: contextKey(buildRoleResearchContext(db, role)),
       recipeVersion: recipes.research,

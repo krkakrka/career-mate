@@ -117,7 +117,7 @@ async function handleCompanyStructural(
 
   const snapshot = await snapshotPage(db, company.url, { kind: 'company', force });
   const text = readSnapshotText(snapshot);
-  const key = { sourceKey: snapshot.text_hash!, recipeVersion: structuralRecipeVersion() };
+  const key = { sourceKey: snapshot.text_hash!, recipeVersion: structuralRecipeVersion('company') };
 
   // Nothing about the input or the recipe changed, so the answer would be
   // identical — the chained research jobs below still run, since their own
@@ -210,7 +210,7 @@ async function handleRoleStructural(
   // whether to resolve a company; re-read fresh right before that check.
   const snapshot = await snapshotPage(db, role.url, { kind: 'role', force });
   const text = readSnapshotText(snapshot);
-  const key = { sourceKey: snapshot.text_hash!, recipeVersion: structuralRecipeVersion() };
+  const key = { sourceKey: snapshot.text_hash!, recipeVersion: structuralRecipeVersion('role') };
 
   // See handleCompanyStructural on why `force` bypasses the freshness skip.
   if (!force && skipIfFresh(db, 'role', roleId, 'role_structural', key)) {
@@ -235,6 +235,26 @@ async function handleRoleStructural(
 
   const title = prefill.title ?? extraction.title ?? null;
 
+  // What the page declared about itself, merged with what the model was
+  // asked for. `resolveRoleCompany` keys on `companyUrl`, so it has to see
+  // the declared value — a JSON-LD `hiringOrganization` URL is the company's
+  // own, where the model's is a reading of the prose.
+  //
+  // The two sources are mutually exclusive by construction: `wanted` was
+  // computed from exactly these fields, so a field the prefill filled was
+  // never asked of the model and comes back absent. The `??` order is
+  // therefore defensive rather than load-bearing — it is the guard for a
+  // model that answers more than it was asked, which the offline fake never
+  // does (it filters to the prompt's declared shape). Mutation-testing
+  // confirms that: reversing the order leaves every test green, while
+  // passing `extraction` here instead of `structural` fails two.
+  const structural: RoleStructuralExtraction = {
+    title,
+    description: extraction.description ?? null,
+    companyName: prefill.companyName ?? extraction.companyName ?? null,
+    companyUrl: prefill.companyUrl ?? extraction.companyUrl ?? null,
+  };
+
   // Everything this derivation produced lands in one transaction, with the
   // derivation row written LAST and inside it. The row is the claim "this
   // input has been fully processed", so it must not become true while any
@@ -244,8 +264,8 @@ async function handleRoleStructural(
   // everything. (Observed as a real test failure, not a hypothetical.)
   const apply = db.transaction(() => {
     updateRoleStructuralFields(db, roleId, {
-      title,
-      description: extraction.description ?? null,
+      title: structural.title ?? null,
+      description: structural.description ?? null,
     });
 
     recordEvent(db, {
@@ -257,7 +277,7 @@ async function handleRoleStructural(
 
     const currentRole = getRoleById(db, roleId);
     if (currentRole?.company_id == null) {
-      resolveRoleCompany(db, roleId, extraction);
+      resolveRoleCompany(db, roleId, structural);
     }
 
     recordDerivation(db, {

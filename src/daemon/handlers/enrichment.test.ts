@@ -140,6 +140,75 @@ describe('company-wlb job — no urlTemplate configured (the shipped default)', 
   });
 });
 
+describe('role-structural with a JSON-LD JobPosting on the page', () => {
+  /** A posting page whose head declares a JobPosting, as Ashby and Lever do. */
+  function postingPage(org: unknown, body = '<p>Company homepage: https://globex.example.com</p>'): string {
+    const ld = JSON.stringify({
+      '@context': 'https://schema.org/',
+      '@type': 'JobPosting',
+      title: 'Staff Platform Engineer',
+      hiringOrganization: org,
+    });
+    return `<html><head><title>Job Application for Staff Platform Engineer at Initech</title><script type="application/ld+json">${ld}</script></head><body><h1>Engineer</h1>${body}</body></html>`;
+  }
+
+  /** What the handler recorded as having been asked of the model. */
+  function modelFields(roleId: number): string[] {
+    const event = listEventsForEntity(db, 'role', roleId).find((e) => e.type === 'role.structural_fetch_completed');
+    return (JSON.parse(event!.context!) as { modelFields: string[] }).modelFields;
+  }
+
+  it('prefers the declaration over the model and asks only for what it omitted', async () => {
+    const server = await startFixtureServer({
+      '/jobs/1': postingPage({ '@type': 'Organization', name: 'Initech', sameAs: 'https://initech.example.com' }),
+    });
+
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/1` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+
+      // The fake model answers 'Senior Backend Engineer' for any posting, so
+      // the declared title winning is what proves the preference order —
+      // and that it beats the ATS boilerplate in <title> on the same page.
+      expect(getRoleById(db, role.id)!.title).toBe('Staff Platform Engineer');
+
+      // description is all that was left to pay for.
+      expect(modelFields(role.id)).toEqual(['description']);
+
+      // The declared hiringOrganization is what the role resolved against —
+      // this fails if resolveRoleCompany is handed the raw extraction again.
+      const company = getCompanyById(db, getRoleById(db, role.id)!.company_id!);
+      expect(company).toMatchObject({ url: 'https://initech.example.com', name: 'Initech' });
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+
+  it('still asks the model for a company URL the declaration gave unusably', async () => {
+    // A bare domain is not an http(s) URL. If the prefill returned it
+    // anyway, missingFields would count companyUrl as answered, isHttpUrl
+    // would reject it in resolveRoleCompany, and the role would be
+    // unresolvable forever — the derivation is written in the same
+    // transaction, so the retry skips and --force re-derives the same value.
+    const server = await startFixtureServer({
+      '/jobs/2': postingPage({ '@type': 'Organization', name: 'Initech', sameAs: 'initech.example.com' }),
+    });
+
+    try {
+      const role = createRole(db, { url: `${server.url}/jobs/2` });
+      await handleEnrichmentJob(db, fakeJob({ kind: 'role-structural', roleId: role.id }));
+
+      expect(modelFields(role.id)).toEqual(['description', 'companyUrl']);
+
+      // Resolved via the model's URL, keeping the declared name.
+      const company = getCompanyById(db, getRoleById(db, role.id)!.company_id!);
+      expect(company).toMatchObject({ url: 'https://globex.example.com', name: 'Initech' });
+    } finally {
+      await server.close();
+    }
+  }, 60_000);
+});
+
 describe('derivation atomicity', () => {
   it('does not record a structural derivation when an effect of it fails', async () => {
     // The derivation row is the claim "this input has been fully

@@ -58,7 +58,7 @@ describe('companyFieldGroupStatus', () => {
       entityId: company.id,
       kind: 'company_structural',
       sourceKey: first.text_hash!,
-      recipeVersion: structuralRecipeVersion(),
+      recipeVersion: structuralRecipeVersion('company'),
     });
 
     expect(kinds(companyFieldGroupStatus(db, company))).not.toContain('company_structural');
