@@ -97,22 +97,48 @@ describe('buildSurfaceUsage', () => {
   });
 
   it('admits spend it cannot attribute instead of absorbing it', () => {
-    // Jobs predating the column, and work the daemon starts for itself. A
-    // total that quietly swallows unknowns is worse than one that admits
-    // them, since the point is choosing which surface to keep using.
+    // Work the daemon starts for itself, and jobs predating the origin
+    // column. A total that quietly swallows unknowns is worse than one that
+    // admits them, since the point is choosing which surface to keep using.
     const daemonJob = withOrigin('daemon', () => enqueueJob(db, { topic: 'enrichment', payload: { kind: 'd' } }));
     const legacy = withOrigin('cli', () => enqueueJob(db, { topic: 'enrichment', payload: { kind: 'e' } }));
     db.prepare('UPDATE jobs SET origin = NULL WHERE id = ?').run(legacy.id);
 
     recordModelCall(db, { kind: 'role_research', model: 'sonnet', costUsd: 0.4, jobId: daemonJob.id });
-    recordModelCall(db, { kind: 'role_research', model: 'sonnet', costUsd: 0.1, jobId: legacy.id });
-    // A model call with no job at all still has to reach the total.
-    recordModelCall(db, { kind: 'role_research', model: 'sonnet', costUsd: 0.25 });
+    // A job with no recorded origin stays unattributed — it must not pick up
+    // the origin of whichever process happens to be running the call.
+    withOrigin('cli', () => recordModelCall(db, { kind: 'role_research', model: 'sonnet', costUsd: 0.1, jobId: legacy.id }));
 
     const report = buildSurfaceUsage(db, EPOCH);
-    expect(report.unattributedSpendUsd).toBeCloseTo(0.75, 6);
-    expect(report.unattributedModelCalls).toBe(3);
+    expect(report.unattributedSpendUsd).toBeCloseTo(0.5, 6);
+    expect(report.unattributedModelCalls).toBe(2);
     expect(report.surfaces.every((surface) => surface.spendUsd === 0)).toBe(true);
+  });
+
+  it('attributes a call with no job behind it to the process that made it', () => {
+    // Nothing routes that way today — every extraction carries a job — but
+    // the column is nullable, and a direct call from a surface really is
+    // caused by that surface.
+    withOrigin('mcp', () => recordModelCall(db, { kind: 'role_research', model: 'sonnet', costUsd: 0.25 }));
+
+    const report = buildSurfaceUsage(db, EPOCH);
+    expect(report.surfaces.find((s) => s.surface === 'mcp')!.spendUsd).toBeCloseTo(0.25, 6);
+    expect(report.unattributedSpendUsd).toBe(0);
+  });
+
+  it('keeps its attribution after the job it came from is gone', () => {
+    // The reason the origin is on the ledger row rather than joined: the
+    // foreign key is ON DELETE SET NULL, so pruning completed jobs used to
+    // move historical spend into "unattributed" and silently rewrite the
+    // answer to "is the agent worth it".
+    const job = withOrigin('mcp', () => enqueueJob(db, { topic: 'enrichment', payload: { kind: 'f' } }));
+    recordModelCall(db, { kind: 'role_research', model: 'sonnet', costUsd: 0.6, jobId: job.id });
+
+    db.prepare('DELETE FROM jobs WHERE id = ?').run(job.id);
+
+    const report = buildSurfaceUsage(db, EPOCH);
+    expect(report.surfaces.find((s) => s.surface === 'mcp')!.spendUsd).toBeCloseTo(0.6, 6);
+    expect(report.unattributedSpendUsd).toBe(0);
   });
 
   it('reports process startup apart from the work itself', () => {

@@ -44,3 +44,16 @@ export function stringArrayOr(value: unknown, fallback: string[]): string[] {
 export function oneOfOr<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
 }
+
+/**
+ * A finite number greater than zero, or the default.
+ *
+ * Distinct from `numberOr` plus a clamp, which is what this replaced: a
+ * clamp turns a nonsensical value into the most destructive legal one
+ * instead of into the safe default the module promises. For a retention
+ * window, `-1` clamped to `0` means "delete everything written up to this
+ * instant".
+ */
+export function positiveOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+}

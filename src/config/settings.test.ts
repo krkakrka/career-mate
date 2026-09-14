@@ -41,6 +41,7 @@ describe('loadSettings', () => {
       // run that actually broke, and caps how many pile up.
       browser_trace: 'on-failure',
       browser_trace_keep: 20,
+      prune_after_days: 90,
     });
   });
 

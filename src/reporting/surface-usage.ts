@@ -11,10 +11,12 @@
  *
  * - **Time** comes from `operational_logs`, where every CLI action and
  *   every MCP tool call lands with a `component` and a `duration_ms`.
- * - **Money** comes from `model_calls` -> `jobs.origin`. Neither surface
- *   spends anything directly; the daemon does, on a queue both of them
- *   feed, which is why `jobs.origin` had to exist before this report could
- *   say anything true about cost.
+ * - **Money** comes from `model_calls.origin`. Neither surface spends
+ *   anything directly; the daemon does, on a queue both of them feed, which
+ *   is why an origin had to be recorded at all before this report could say
+ *   anything true about cost. It is stamped on the ledger row itself rather
+ *   than joined through `job_id` (migration 0011), so that pruning
+ *   completed jobs cannot rewrite historical attribution.
  *
  * Durations are reported as median and p90, not a mean: one four-minute
  * enrichment among a hundred 30 ms reads moves a mean and tells you
@@ -68,8 +70,11 @@ export interface SurfaceUsageReport {
   sinceIso: string;
   surfaces: SurfaceUsage[];
   /**
-   * Spend on jobs with no recorded origin — everything enqueued before the
-   * column existed, plus anything the daemon started for itself.
+   * Spend whose ledger row records no surface: work the daemon started for
+   * itself, and anything enqueued before the origin column existed.
+   *
+   * A call with no job behind it is *not* in here — it is attributed to the
+   * process that made it, which really is its cause.
    *
    * Reported rather than folded into a surface. The whole point is deciding
    * which surface to keep using, and a total that quietly absorbs unknowns
@@ -127,15 +132,15 @@ export function buildSurfaceUsage(db: Database.Database, sinceIso: string): Surf
     )
     .all(sinceIso, ...REPORTED_SURFACES) as DurationRow[];
 
-  // LEFT JOIN, not an inner one: a model call with no job (nothing routes
-  // that way today, but the column is nullable) must still be counted, as
-  // unattributed rather than silently dropped from the total.
+  // Read straight off the ledger, with no join. It used to reach through
+  // `job_id` into `jobs.origin`, which made the answer to "is the agent
+  // worth it" depend on the job rows still existing — and the foreign key
+  // is `ON DELETE SET NULL`, so pruning completed jobs would have silently
+  // moved historical spend into "unattributed".
   const spend = db
     .prepare(
-      `SELECT j.origin AS origin, SUM(m.cost_usd) AS total, COUNT(*) AS calls
-       FROM model_calls m LEFT JOIN jobs j ON j.id = m.job_id
-       WHERE m.occurred_at >= ?
-       GROUP BY j.origin`,
+      `SELECT origin, SUM(cost_usd) AS total, COUNT(*) AS calls
+       FROM model_calls WHERE occurred_at >= ? GROUP BY origin`,
     )
     .all(sinceIso) as SpendRow[];
 

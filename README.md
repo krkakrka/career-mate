@@ -75,6 +75,8 @@ cm auth record-har <url>   # capture a page's traffic, replayable offline with `
 cm inbox / cm inbox ack
 cm events <id>
 cm logs                    # durable CLI/daemon/job diagnostics, with filtering and --follow
+cm prune                   # delete old logs and completed jobs (--dry-run, --older-than, --vacuum);
+                           #   never touches spend, derivations, snapshots or events
 cm daemon / cm worker      # worker jobs/failed/retry/drain/status
 ```
 

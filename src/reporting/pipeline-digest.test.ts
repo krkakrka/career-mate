@@ -22,6 +22,7 @@ const SETTINGS: Settings = {
   daemon_idle_exit_minutes: 30,
   browser_trace: 'on-failure',
   browser_trace_keep: 20,
+  prune_after_days: 90,
 };
 
 let tempDir: string;

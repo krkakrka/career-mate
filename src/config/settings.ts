@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { numberOr, oneOfOr } from '../lib/config-coerce.js';
+import { numberOr, oneOfOr, positiveOr } from '../lib/config-coerce.js';
 import { loadJsonConfig } from '../lib/json-config.js';
 import { getDataDir } from '../lib/paths.js';
 import { TRACE_MODES, type TraceMode } from '../browser/trace.js';
@@ -56,6 +56,21 @@ export interface Settings {
    * printed.
    */
   browser_trace_keep: number;
+  /**
+   * Default retention for `cm prune`, in days.
+   *
+   * Applies only to diagnostics — `operational_logs` and completed `jobs`.
+   * The spend ledger, derivations, page snapshots and the event log are
+   * never pruned; `src/db/prune.ts` says why for each.
+   *
+   * Must be positive. A non-positive value falls back to the default rather
+   * than being clamped: clamping turned `-1` into a cutoff of *now*, which
+   * deletes every row including ones written seconds earlier, and `0` is the
+   * same trap from the other side — in this very file `daemon_idle_exit_minutes: 0`
+   * means *disabled*, so someone writing `0` to switch pruning off would get
+   * total deletion instead.
+   */
+  prune_after_days: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -68,6 +83,7 @@ const DEFAULT_SETTINGS: Settings = {
   recompute_min_interval_minutes: 60,
   stale_running_job_minutes: 30,
   daemon_idle_exit_minutes: 30,
+  prune_after_days: 90,
   browser_trace: 'on-failure',
   browser_trace_keep: 20,
 };
@@ -96,6 +112,7 @@ export function loadSettings(): Settings {
     ),
     stale_running_job_minutes: numberOr(settings.stale_running_job_minutes, DEFAULT_SETTINGS.stale_running_job_minutes),
     daemon_idle_exit_minutes: numberOr(settings.daemon_idle_exit_minutes, DEFAULT_SETTINGS.daemon_idle_exit_minutes),
+    prune_after_days: positiveOr(settings.prune_after_days, DEFAULT_SETTINGS.prune_after_days),
     browser_trace: oneOfOr(settings.browser_trace, TRACE_MODES, DEFAULT_SETTINGS.browser_trace),
     browser_trace_keep: Math.max(1, Math.floor(numberOr(settings.browser_trace_keep, DEFAULT_SETTINGS.browser_trace_keep))),
   };

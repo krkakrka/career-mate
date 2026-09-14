@@ -109,8 +109,12 @@ describe('cm status — usage by surface', () => {
     const job = db
       .prepare("INSERT INTO jobs (topic, payload, origin) VALUES ('enrichment', '{}', 'mcp')")
       .run();
+    // `origin` on the ledger row too, which is what `recordModelCall`
+    // writes. The report used to reach through `job_id` into `jobs.origin`;
+    // it reads the ledger's own column now, so that a later `cm prune`
+    // cannot rewrite historical attribution.
     db.prepare(
-      "INSERT INTO model_calls (kind, model, cost_usd, job_id) VALUES ('role_research', 'sonnet', 0.42, ?)",
+      "INSERT INTO model_calls (kind, model, cost_usd, job_id, origin) VALUES ('role_research', 'sonnet', 0.42, ?, 'mcp')",
     ).run(job.lastInsertRowid as number);
     db.close();
 
