@@ -57,3 +57,18 @@ export function oneOfOr<T extends string>(value: unknown, allowed: readonly T[],
 export function positiveOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
 }
+
+/**
+ * A whole number in `[0, max]`, or the default.
+ *
+ * Distinct from a clamp for the reason `positiveOr` gives, with one
+ * addition: here `0` is a *legitimate* value ("no cooldown"), so a negative
+ * cannot simply be clamped up into it — that would silently turn a typo
+ * into "every denied role is immediately ready to reapply". Out of range in
+ * either direction falls back to the default.
+ */
+export function wholeInRangeOr(value: unknown, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const whole = Math.floor(value);
+  return whole >= 0 && whole <= max ? whole : fallback;
+}

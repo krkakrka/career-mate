@@ -4,6 +4,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Settings } from '../config/settings.js';
+import { restoreEnv } from '../../test/helpers/env.js';
 import { openDb } from '../db/client.js';
 import { createCompany } from '../db/repositories/companies.js';
 import { createRecruiterContact } from '../db/repositories/recruiter-contacts.js';
@@ -26,14 +27,23 @@ const SETTINGS: Settings = {
 };
 
 let tempDir: string;
+let originalDataDir: string | undefined;
 let db: Database.Database;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-funnel-'));
+  // Required even though this suite opens its database explicitly:
+  // `setStatus` reads `settings.json` through `getDataDir()`, and
+  // `loadJsonConfig` *creates* the file when missing — so without this the
+  // suite writes into the developer's real `.data` and silently inherits
+  // their personal cooldown setting.
+  originalDataDir = process.env.CM_DATA_DIR;
+  process.env.CM_DATA_DIR = tempDir;
   db = openDb(path.join(tempDir, 'career-mate.db'));
 });
 
 afterEach(() => {
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

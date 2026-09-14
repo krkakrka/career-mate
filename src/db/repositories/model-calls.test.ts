@@ -7,16 +7,24 @@ import { recordDerivation } from '../../derive/record.js';
 import { openDb } from '../client.js';
 import { runTrackedExtraction } from '../../enrichment/tracked-extraction.js';
 import { recordModelCall, spendSince } from './model-calls.js';
+import { restoreEnv } from '../../../test/helpers/env.js';
 
 let tempDir: string;
+let originalDataDir: string | undefined;
 let db: Database.Database;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-spend-'));
+  // `loadSettings`/`loadPreferences` resolve through getDataDir(), and
+  // loadJsonConfig *creates* the file when missing — so without this the
+  // suite writes into the developer's real `.data`.
+  originalDataDir = process.env.CM_DATA_DIR;
+  process.env.CM_DATA_DIR = tempDir;
   db = openDb(path.join(tempDir, 'career-mate.db'));
 });
 
 afterEach(() => {
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

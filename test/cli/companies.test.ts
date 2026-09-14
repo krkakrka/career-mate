@@ -89,4 +89,29 @@ describe('cm companies', () => {
     const show = runCli(['companies', 'show', '1'], { dataDir });
     expect(show.stdout).toContain('Know an engineer there');
   });
+
+  it('treats trailing-slash and scheme variants as one company, but a different host as another', () => {
+    // Verified working and pinned here, not newly built: the Backlog claimed
+    // `https://x.com/` and `https://x.com` created two companies, and they
+    // do not — `cm companies add` goes through `findCompanyByUrl`, which
+    // compares normalized URLs. Nothing anywhere asserted that, so it could
+    // have regressed silently and quietly re-created the duplicate-company
+    // problem the enrichment path already solved.
+    expect(runCli(['companies', 'add', 'https://example.com/'], { dataDir }).stdout).toContain('Added company #1');
+
+    // `normalizeUrl` drops the scheme and trailing slashes. It does *not*
+    // strip `www.`, so that is deliberately not claimed here.
+    for (const variant of ['https://example.com', 'http://example.com', 'https://example.com//']) {
+      const again = runCli(['companies', 'add', variant], { dataDir });
+      expect(again.exitCode, variant).toBe(0);
+      expect(again.stdout, variant).toContain('Already tracking company #1');
+    }
+
+    // The negative half, without which the test passes for a degenerate
+    // lookup that returns the first company for anything.
+    expect(runCli(['companies', 'add', 'https://other.example.org'], { dataDir }).stdout).toContain('Added company #2');
+    expect(runCli(['companies', 'add', 'https://example.com/careers'], { dataDir }).stdout).toContain('Added company #3');
+
+    expect(runCli(['companies', 'list'], { dataDir }).stdout.match(/^#\d+/gm)?.length).toBe(3);
+  });
 });

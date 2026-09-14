@@ -198,7 +198,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'set_stage',
     description:
-      'Move an opportunity to a different stage. Moving to "denied" sets a reapply date one month out. ' +
+      'Move an opportunity to a different stage. Moving to "denied" sets a reapply date using the configured cooldown. ' +
       'The note is recorded in the stage history — say why, not just what.',
     inputSchema: OBJECT(
       {

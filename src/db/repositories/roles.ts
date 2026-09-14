@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { ACTIVE_ROLE_STATUSES, type RoleStatus } from '../../domain/role-status.js';
+import { loadSettings } from '../../config/settings.js';
 import { normalizeUrl } from '../../lib/normalize-url.js';
 import { DuplicateError, NotFoundError } from '../errors.js';
 
@@ -241,10 +242,55 @@ export function getStatusHistory(db: Database.Database, roleId: number): RoleSta
     .all(roleId) as RoleStatusHistoryEntry[];
 }
 
-function addOneMonthIso(from: Date): string {
+/**
+ * `from` plus `months`, clamped to the end of the target month.
+ *
+ * `setUTCMonth(+1)` alone overflows: 31 January becomes 3 March, because
+ * February has no 31st and the Date object rolls forward. For a reapply
+ * cooldown that silently adds three days to the wait and puts the date in
+ * the wrong month, so a role denied at the end of January reappears in
+ * March rather than February. Clamping to 28/29 February is what "a month
+ * later" means to a person.
+ *
+ * `months: 0` is a legitimate setting — "no cooldown, reapply whenever" —
+ * and produces `from` unchanged rather than a null date, so the field still
+ * reads as "you may reapply from this moment".
+ */
+export function addMonthsIso(from: Date, months: number): string {
   const date = new Date(from.getTime());
-  date.setUTCMonth(date.getUTCMonth() + 1);
+  const targetMonth = date.getUTCMonth() + months;
+  const dayOfMonth = date.getUTCDate();
+
+  // Day 1 first, so setUTCMonth cannot roll forward while we move it; then
+  // the original day, capped at what the target month actually has.
+  date.setUTCDate(1);
+  date.setUTCMonth(targetMonth);
+  const daysInTargetMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(dayOfMonth, daysInTargetMonth));
+
+  // A large enough `months` pushes the date outside what a Date can hold,
+  // and `toISOString()` then throws a RangeError naming nothing — so
+  // `cm roles set-status 5 denied` would die on a bad config key without
+  // saying which one. Settings caps the value; this is the backstop for a
+  // direct caller.
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Cannot add ${months} months to ${from.toISOString()}: the result is not a representable date`);
+  }
   return date.toISOString();
+}
+
+export interface SetStatusOptions {
+  /**
+   * How long the reapply cooldown runs, in months. Defaults to
+   * `settings.reapply_cooldown_months`.
+   *
+   * Injectable so tests can pin the arithmetic without writing a config
+   * file, and so a caller that has already loaded settings need not make
+   * this read them again.
+   */
+  cooldownMonths?: number;
+  /** The instant the cooldown counts from. Injectable so a test can assert an exact date instead of a tolerance. */
+  now?: Date;
 }
 
 export function setStatus(
@@ -252,9 +298,19 @@ export function setStatus(
   id: number,
   status: RoleStatus,
   context?: string,
+  options: SetStatusOptions = {},
 ): Role {
   const role = requireRole(db, id);
-  const reapplyAfter = status === 'denied' ? addOneMonthIso(new Date()) : role.reapply_after;
+  // Settings are read only on the branch that needs them. Reading them
+  // unconditionally made *every* status change depend on config: it broke
+  // `cm roles set-status 5 applied` outright on a malformed `settings.json`
+  // (`loadJsonConfig` throws by design), and — because `loadJsonConfig`
+  // creates the file when missing — it made two reporting test suites write
+  // into the developer's real `.data`, which CLAUDE.md forbids outright.
+  const reapplyAfter =
+    status === 'denied'
+      ? addMonthsIso(options.now ?? new Date(), options.cooldownMonths ?? loadSettings().reapply_cooldown_months)
+      : role.reapply_after;
 
   const applyChange = db.transaction(() => {
     db.prepare(

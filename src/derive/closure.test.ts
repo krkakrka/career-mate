@@ -4,19 +4,27 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import phraseList from './closure-phrases.json' with { type: 'json' };
 import { decideClosure, detectClosurePhrase } from './closure.js';
+import { restoreEnv } from '../../test/helpers/env.js';
 
 let tempDir: string;
+let originalDataDir: string | undefined;
 /** A stand-in for extract-closure-status.sh that fails loudly, so reaching the model path is unmissable. */
 let loudScript: string;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-closure-'));
+  // `loadSettings`/`loadPreferences` resolve through getDataDir(), and
+  // loadJsonConfig *creates* the file when missing — so without this the
+  // suite writes into the developer's real `.data`.
+  originalDataDir = process.env.CM_DATA_DIR;
+  process.env.CM_DATA_DIR = tempDir;
   loudScript = path.join(tempDir, 'must-not-run.sh');
   fs.writeFileSync(loudScript, '#!/usr/bin/env bash\necho "MODEL WAS CALLED" >&2\nexit 42\n');
   fs.chmodSync(loudScript, 0o755);
 });
 
 afterEach(() => {
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

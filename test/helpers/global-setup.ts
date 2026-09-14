@@ -1,5 +1,7 @@
 import { execFileSync, execSync } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Kills every daemon a test run left behind.
@@ -15,7 +17,42 @@ import os from 'node:os';
  * safety property here: a daemon running against the project's real `.data`
  * must never be killed by a test run.
  */
+/**
+ * Records what the project's real `.data` holds before the suite runs, so
+ * `teardown` can prove nothing wrote into it.
+ *
+ * CLAUDE.md requires every test touching `.data` to set `CM_DATA_DIR`, and
+ * three suites had quietly stopped doing so — each because something they
+ * called read a config file, and `loadJsonConfig` *creates* the file when
+ * missing. The symptom is invisible: the suite passes, and the developer's
+ * own settings file is silently created or consulted.
+ */
+const realDataDir = fileURLToPath(new URL('../../.data', import.meta.url));
+let dataDirBefore: string[] = [];
+
+export function setup(): void {
+  dataDirBefore = listDataDir();
+}
+
+function listDataDir(): string[] {
+  try {
+    return fs.readdirSync(realDataDir).sort();
+  } catch {
+    return [];
+  }
+}
+
 export function teardown(): void {
+  const appeared = listDataDir().filter((entry) => !dataDirBefore.includes(entry));
+  if (appeared.length > 0) {
+    // Loud, not fatal: failing the run here would mask whatever the suite
+    // was actually reporting, and the entry has already been created.
+    console.warn(
+      `[global-teardown] a test wrote into the project's real .data (${appeared.join(', ')}) — ` +
+        'it is missing CM_DATA_DIR; see CLAUDE.md',
+    );
+  }
+
   const tempPrefix = normalize(os.tmpdir());
 
   let listing = '';
@@ -51,6 +88,8 @@ function normalize(dir: string): string {
   return dir.replace(/^\/private(?=\/)/, '');
 }
 
+
+
 /** True only when the daemon's CM_DATA_DIR is under the OS temp dir — i.e. it belongs to a test, not to the user. */
 function servesTempDataDir(pid: number, tempPrefix: string): boolean {
   let environment = '';
@@ -68,6 +107,3 @@ function servesTempDataDir(pid: number, tempPrefix: string): boolean {
   const dataDir = normalize(match[1]);
   return dataDir.startsWith(tempPrefix) || dataDir.startsWith('/tmp/');
 }
-
-/** Vitest requires a setup export alongside the teardown; there is nothing to set up. */
-export function setup(): void {}

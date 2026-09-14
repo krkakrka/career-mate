@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { numberOr, oneOfOr, positiveOr } from '../lib/config-coerce.js';
+import { numberOr, oneOfOr, positiveOr, wholeInRangeOr } from '../lib/config-coerce.js';
 import { loadJsonConfig } from '../lib/json-config.js';
 import { getDataDir } from '../lib/paths.js';
 import { TRACE_MODES, type TraceMode } from '../browser/trace.js';
@@ -15,6 +15,17 @@ export interface PageRefreshDays {
 export interface Settings {
   recruiter_nudge_days: number;
   stale_days: number;
+  /**
+   * How long after a `denied` before a role is offered up to reapply, in
+   * months. `0` means "no cooldown". Floored to a whole number: a fraction
+   * of a month is not a thing calendars have.
+   *
+   * A negative value falls back to the default rather than clamping to `0`,
+   * because `0` is a real setting here — clamping would turn a typo into
+   * "every denied role is immediately ready to reapply". Capped too: a large
+   * enough value pushes the computed date outside the range a Date can hold,
+   * and the failure surfaces as a RangeError naming nothing.
+   */
   reapply_cooldown_months: number;
   page_refresh_days: PageRefreshDays;
   /** Per-`claude` call spend ceiling, passed through to the enrichment scripts. */
@@ -88,6 +99,9 @@ const DEFAULT_SETTINGS: Settings = {
   browser_trace_keep: 20,
 };
 
+/** A century. Past this the arithmetic leaves the representable Date range, and no job search runs that long. */
+const MAX_COOLDOWN_MONTHS = 1200;
+
 export function loadSettings(): Settings {
   const settings = loadJsonConfig(path.join(getDataDir(), 'config', 'settings.json'), DEFAULT_SETTINGS);
 
@@ -103,7 +117,11 @@ export function loadSettings(): Settings {
     },
     recruiter_nudge_days: numberOr(settings.recruiter_nudge_days, DEFAULT_SETTINGS.recruiter_nudge_days),
     stale_days: numberOr(settings.stale_days, DEFAULT_SETTINGS.stale_days),
-    reapply_cooldown_months: numberOr(settings.reapply_cooldown_months, DEFAULT_SETTINGS.reapply_cooldown_months),
+    reapply_cooldown_months: wholeInRangeOr(
+      settings.reapply_cooldown_months,
+      MAX_COOLDOWN_MONTHS,
+      DEFAULT_SETTINGS.reapply_cooldown_months,
+    ),
     claude_max_budget_usd: numberOr(settings.claude_max_budget_usd, DEFAULT_SETTINGS.claude_max_budget_usd),
     claude_timeout_seconds: numberOr(settings.claude_timeout_seconds, DEFAULT_SETTINGS.claude_timeout_seconds),
     recompute_min_interval_minutes: numberOr(

@@ -110,3 +110,43 @@ describe('browser_trace coercion', () => {
     }
   });
 });
+
+describe('reapply_cooldown_months coercion', () => {
+  function write(value: unknown): void {
+    const configDir = path.join(tempDir, 'config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ reapply_cooldown_months: value }));
+  }
+
+  it('accepts zero, which means no cooldown', () => {
+    write(0);
+    expect(loadSettings().reapply_cooldown_months).toBe(0);
+  });
+
+  it('floors a fraction, because calendars have no half-months', () => {
+    write(1.7);
+    expect(loadSettings().reapply_cooldown_months).toBe(1);
+  });
+
+  it('falls back to the default for a negative rather than clamping to zero', () => {
+    // Clamping up would land on `0`, which is a *legitimate* setting here —
+    // turning a typo into "every denied role is immediately ready to
+    // reapply", permanently, in both `cm status` and the funnel.
+    write(-1);
+    expect(loadSettings().reapply_cooldown_months).toBe(1);
+  });
+
+  it('falls back for a value too large to produce a real date', () => {
+    // Otherwise `setUTCMonth` pushes past the representable Date range and
+    // `cm roles set-status 5 denied` dies on a RangeError naming nothing.
+    write(1e15);
+    expect(loadSettings().reapply_cooldown_months).toBe(1);
+  });
+
+  it('falls back for a value that is not a number at all', () => {
+    for (const value of ['3', null, {}, Number.NaN]) {
+      write(value);
+      expect(loadSettings().reapply_cooldown_months, JSON.stringify(value)).toBe(1);
+    }
+  });
+});

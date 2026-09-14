@@ -118,8 +118,14 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
   const reapplyReady = (
     db
       .prepare(
+        // `status = 'denied'` matters as much as the date. `reapply_after`
+        // survives a move out of `denied` (a reopened req you set back to
+        // `applied` keeps it), so without this the digest goes on offering
+        // to reapply for a role you are actively in process on. `funnel.ts`
+        // has always filtered this way; the digest did not.
         `SELECT id, title, url, reapply_after FROM roles
-         WHERE reapply_after IS NOT NULL AND reapply_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE status = 'denied' AND reapply_after IS NOT NULL
+           AND reapply_after <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          ORDER BY reapply_after ASC`,
       )
       .all() as Pick<Role, 'id' | 'title' | 'url' | 'reapply_after'>[]
@@ -129,7 +135,8 @@ export function buildPipelineDigest(db: Database.Database, settings: Settings): 
     db
       .prepare(
         `SELECT id, title, url, reapply_after FROM roles
-         WHERE reapply_after IS NOT NULL AND reapply_after > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE status = 'denied' AND reapply_after IS NOT NULL
+           AND reapply_after > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          ORDER BY reapply_after ASC`,
       )
       .all() as Pick<Role, 'id' | 'title' | 'url' | 'reapply_after'>[]

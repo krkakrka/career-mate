@@ -1,8 +1,29 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { restoreEnv } from '../../test/helpers/env.js';
 import { ExtractionError, runExtraction } from './claude-extract.js';
 
 const fakeScript = fileURLToPath(new URL('../../test/fixtures/fake-claude-envelope.sh', import.meta.url));
+
+let tempDir: string;
+let originalDataDir: string | undefined;
+
+beforeEach(() => {
+  // `runExtraction` reads `claude_timeout_seconds` from settings, and
+  // `loadJsonConfig` *creates* `settings.json` when missing — so without a
+  // temp data dir this suite writes into the developer's real `.data`.
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-extract-'));
+  originalDataDir = process.env.CM_DATA_DIR;
+  process.env.CM_DATA_DIR = tempDir;
+});
+
+afterEach(() => {
+  restoreEnv('CM_DATA_DIR', originalDataDir);
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
 
 describe('runExtraction', () => {
   it('parses a fenced JSON result (```json ... ```)', async () => {
