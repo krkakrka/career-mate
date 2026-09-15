@@ -18,14 +18,16 @@ export function buildHandlerRegistry(db: Database.Database): Partial<Record<JobT
 }
 
 export const DEFAULT_TOPIC_CONCURRENCY: Record<JobTopic, number> = {
-  // enrichment: only company-wlb within this topic actually touches
-  // Playwright/Chrome (one real shared browser); the rest (structural
-  // fetch, role/company research) doesn't strictly need concurrency=1, but
-  // splitting Playwright-bound work into its own topic is a bigger change
-  // than this default warrants right now (see the step 8 commit message).
+  // enrichment: nothing in this topic touches Playwright any more — the
+  // shared-browser constraint that originally set this to 1 went with the
+  // login-gated WLB source in Step 40. It stays at 1 because enrichment is
+  // where the money is: every slot is a `claude -p` call with web search,
+  // and serialising them keeps one `cm discover` run's follow-up work from
+  // spending several budgets at once. Raise it deliberately, not by
+  // inheriting a reason that no longer applies.
   enrichment: 1,
-  // tips: no Playwright involved at all — concurrency=1 here is just
-  // because it's a single ad-hoc user-invoked command, not a shared-browser constraint.
+  // tips: a single ad-hoc user-invoked command, so there is nothing to
+  // parallelise.
   tips: 1,
   notification: 3,
   refresh: 1,

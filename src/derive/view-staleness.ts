@@ -9,6 +9,7 @@ import type { Role } from '../db/repositories/roles.js';
 import {
   companyResearchPayload,
   companyStructuralPayload,
+  companyWlbPayload,
   roleResearchPayload,
   roleStructuralPayload,
 } from '../domain/enrichment-payload.js';
@@ -33,6 +34,7 @@ export interface RecipeVersions {
   companyStructural: string;
   roleResearch: string;
   companyResearch: string;
+  companyWlb: string;
 }
 
 export function currentRecipeVersions(): RecipeVersions {
@@ -41,6 +43,7 @@ export function currentRecipeVersions(): RecipeVersions {
     companyStructural: structuralRecipeVersion('company'),
     roleResearch: researchRecipeVersion('role'),
     companyResearch: researchRecipeVersion('company'),
+    companyWlb: researchRecipeVersion('wlb'),
   };
 }
 
@@ -88,11 +91,14 @@ function statusFor(
 }
 
 /**
- * Which of a company's displayed field groups no longer match their
- * inputs. `company_wlb` is deliberately absent: its input comes from an
- * authenticated browser fetch, so the current key cannot be computed
- * without doing the fetch — and doing a fetch to render a list would defeat
- * the point of checking laziness by hash.
+ * Which of a company's displayed field groups no longer match their inputs.
+ *
+ * `company_wlb` was excluded while its input came from an authenticated
+ * browser fetch — the key could not be computed without doing the fetch,
+ * and fetching to render a list defeats the point of checking laziness by
+ * hash. It now reads public sources through the same research script as the
+ * others, so its key is the same cheap pair, and leaving it out meant a
+ * changed WLB prompt was never detected and never requeued.
  */
 export function companyFieldGroupStatus(
   db: Database.Database,
@@ -104,6 +110,12 @@ export function companyFieldGroupStatus(
     statusFor(db, 'company', company.id, 'company_research', {
       sourceKey: contextKey(buildCompanyResearchContext(company)),
       recipeVersion: recipes.companyResearch,
+    }),
+    // Same context, different recipe — the two ask the model different
+    // questions about the same company.
+    statusFor(db, 'company', company.id, 'company_wlb', {
+      sourceKey: contextKey(buildCompanyResearchContext(company)),
+      recipeVersion: recipes.companyWlb,
     }),
   ].filter((status): status is FieldGroupStatus => status !== undefined);
 }
@@ -132,6 +144,8 @@ function recomputePayload(kind: DerivationKind, entityId: number): EnrichmentJob
       return companyStructuralPayload(entityId);
     case 'company_research':
       return companyResearchPayload(entityId);
+    case 'company_wlb':
+      return companyWlbPayload(entityId);
     case 'role_structural':
       return roleStructuralPayload(entityId);
     case 'role_research':
@@ -152,6 +166,10 @@ function recomputePayload(kind: DerivationKind, entityId: number): EnrichmentJob
  */
 const RESEARCH_PREREQUISITE: Partial<Record<DerivationKind, DerivationKind>> = {
   company_research: 'company_structural',
+  // WLB reads the same context as company research, so it needs the same
+  // prerequisite. It was previously absent from this map only because it
+  // was absent from staleness entirely.
+  company_wlb: 'company_structural',
   role_research: 'role_structural',
 };
 

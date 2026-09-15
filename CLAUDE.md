@@ -68,6 +68,12 @@ Two specifics worth knowing before you touch them:
 
 Use `CM_CLAUDE_BIN` to substitute a binary. Never hardcode `claude`.
 
+**Never run an enrichment script, `cm worker drain`, or the daemon by hand without setting
+`CM_CLAUDE_BIN`.** They call the real model and spend real money. Debugging a prompt with
+`printf '{}' | bash src/enrichment/scripts/research-web.sh wlb "..."` costs about seven cents each
+time; draining a queue after a discover run costs whatever the queue holds. The test harness sets
+this for you — a shell does not.
+
 ## Tests are offline by default
 
 `npm test` must stay deterministic, free and under a minute. It points `CM_CLAUDE_BIN` at

@@ -13,6 +13,8 @@ export interface Company {
   ai_proof_score: number | null;
   ai_proof_notes: string | null;
   wlb_score: number | null;
+  /** How well-sourced `wlb_score` is — see `src/domain/confidence.ts`. Null on rows predating the column. */
+  wlb_confidence: string | null;
   wlb_notes: string | null;
   last_enriched_at: string | null;
   created_at: string;
@@ -144,31 +146,55 @@ export interface UpdateCompanyResearchFieldsParams {
   aiProofScore?: number | null;
   aiProofNotes?: string | null;
   wlbScore?: number | null;
+  wlbConfidence?: string | null;
   wlbNotes?: string | null;
 }
 
-/** Applies full-enrichment research results (IPO status, AI-proofness, WLB) and stamps last_enriched_at. */
+/**
+ * Applies full-enrichment research results (IPO status, AI-proofness, WLB)
+ * and stamps last_enriched_at.
+ *
+ * The IPO/AI-proof fields are `COALESCE`d — absent means "leave alone".
+ *
+ * **The three WLB columns are not.** They are written together whenever the
+ * caller passes the `wlb` group at all, because for this field `null` is a
+ * *result*: the prompt explicitly asks the model to say when it found
+ * almost nothing. Under `COALESCE`, that second pass left the previous
+ * `0.9 / high` on the row with the new "found almost nothing" notes beside
+ * it, and `wlbTerm` went on applying 0.9 to the ranking at full weight. It
+ * also re-attached an *old* confidence to a *new* score whenever the
+ * model's confidence was rejected. This is the `salary_currency` hazard
+ * CLAUDE.md records, on a different column.
+ */
 export function updateResearchFields(
   db: Database.Database,
   id: number,
   fields: UpdateCompanyResearchFieldsParams,
 ): Company {
   requireCompany(db, id);
+  // `'wlbScore' in fields` distinguishes "not part of this update" from
+  // "researched and found nothing" — which `?? null` cannot.
+  const writesWlb = 'wlbScore' in fields || 'wlbConfidence' in fields || 'wlbNotes' in fields;
   db.prepare(
     `UPDATE companies
-     SET ipo_status = COALESCE(?, ipo_status), ai_proof_score = COALESCE(?, ai_proof_score),
-         ai_proof_notes = COALESCE(?, ai_proof_notes), wlb_score = COALESCE(?, wlb_score),
-         wlb_notes = COALESCE(?, wlb_notes),
+     SET ipo_status = COALESCE(:ipoStatus, ipo_status),
+         ai_proof_score = COALESCE(:aiProofScore, ai_proof_score),
+         ai_proof_notes = COALESCE(:aiProofNotes, ai_proof_notes),
+         wlb_score = CASE WHEN :writesWlb THEN :wlbScore ELSE wlb_score END,
+         wlb_confidence = CASE WHEN :writesWlb THEN :wlbConfidence ELSE wlb_confidence END,
+         wlb_notes = CASE WHEN :writesWlb THEN :wlbNotes ELSE wlb_notes END,
          last_enriched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE id = ?`,
-  ).run(
-    fields.ipoStatus ?? null,
-    fields.aiProofScore ?? null,
-    fields.aiProofNotes ?? null,
-    fields.wlbScore ?? null,
-    fields.wlbNotes ?? null,
+     WHERE id = :id`,
+  ).run({
+    ipoStatus: fields.ipoStatus ?? null,
+    aiProofScore: fields.aiProofScore ?? null,
+    aiProofNotes: fields.aiProofNotes ?? null,
+    writesWlb: writesWlb ? 1 : 0,
+    wlbScore: fields.wlbScore ?? null,
+    wlbConfidence: fields.wlbConfidence ?? null,
+    wlbNotes: fields.wlbNotes ?? null,
     id,
-  );
+  });
   return requireCompany(db, id);
 }

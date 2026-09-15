@@ -1,0 +1,17 @@
+-- How well-sourced a work-life-balance score is.
+--
+-- `wlb_score` feeds `priority_score` directly and nothing downstream reads
+-- it back to notice it was wrong — the same asymmetry that makes the
+-- closure-phrase list and the remote/EU rule deliberately conservative. The
+-- difference here is that WLB cannot be made deterministic: its original
+-- source was Glassdoor, which is login-gated, and the replacement is a model
+-- reading public discussion (Blind, Reddit, levels.fyi comments). That is
+-- sentiment, not fact, and the quality of it varies enormously between a
+-- company with a hundred public data points and one with none.
+--
+-- So the score arrives with a confidence, and `wlbTerm` shrinks a
+-- low-confidence score toward neutral rather than letting it move the
+-- ranking as much as a well-sourced one. Null means "not recorded" —
+-- every row predating this column — and is treated as the lowest
+-- confidence that still uses the score at all.
+ALTER TABLE companies ADD COLUMN wlb_confidence TEXT;

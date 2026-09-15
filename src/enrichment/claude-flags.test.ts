@@ -47,7 +47,6 @@ function valueOf(argv: string[], flag: string): string | undefined {
 const EXTRACTION_SCRIPTS: Array<[string, string[]]> = [
   ['extract-structural.sh', ['role']],
   ['extract-closure-status.sh', []],
-  ['extract-wlb.sh', []],
 ];
 
 const RESEARCH_SCRIPTS: Array<[string, string[]]> = [

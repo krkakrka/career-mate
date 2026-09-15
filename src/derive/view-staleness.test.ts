@@ -45,8 +45,17 @@ describe('companyFieldGroupStatus', () => {
 
     // A freshly added entity has computed nothing yet; that is a job that
     // has not run, not a value on screen known to be out of date.
-    expect(groups.map((group) => group.marker)).toEqual(['(pending)', '(pending)']);
-    expect(groups.map((group) => group.kind)).toEqual(['company_structural', 'company_research']);
+    // Three groups now: `company_wlb` was excluded while its input came from
+    // an authenticated browser fetch whose key could not be computed
+    // without doing the fetch. It reads public sources through the same
+    // research script as the others now, so a changed WLB prompt is
+    // detected and requeued like any other.
+    expect(groups.map((group) => group.marker)).toEqual(['(pending)', '(pending)', '(pending)']);
+    expect(groups.map((group) => group.kind)).toEqual([
+      'company_structural',
+      'company_research',
+      'company_wlb',
+    ]);
   });
 
   it('marks a group stale once a newer snapshot no longer matches what it was derived from', async () => {
@@ -82,6 +91,8 @@ describe('enqueueRecomputes', () => {
     const company = createCompany(db, 'https://example.com');
     const groups = companyFieldGroupStatus(db, company);
 
+    // One job, not three: `company_research` and `company_wlb` both wait on
+    // the structural extraction they read their context from.
     expect(enqueueRecomputes(db, 'company', company.id, groups)).toBe(1);
     expect(enqueueRecomputes(db, 'company', company.id, groups)).toBe(0);
     expect(enqueueRecomputes(db, 'company', company.id, groups)).toBe(0);

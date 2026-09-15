@@ -51,8 +51,11 @@ case "$KIND" in
   company)
     ALL_FIELDS="ipoStatus,aiProofScore,aiProofNotes"
     ;;
+  wlb)
+    ALL_FIELDS="wlbScore,wlbNotes,wlbConfidence"
+    ;;
   *)
-    echo "usage: research-web.sh <role|company> <instructions> [fields]  (context piped via stdin)" >&2
+    echo "usage: research-web.sh <role|company|wlb> <instructions> [fields]  (context piped via stdin)" >&2
     exit 1
     ;;
 esac
@@ -66,6 +69,9 @@ field_shape() {
     equity) echo '"equity": string|null' ;;
     remoteEu) echo '"remoteEu": "yes"|"no"|"unknown"' ;;
     ipoStatus) echo '"ipoStatus": string|null' ;;
+    wlbScore) echo '"wlbScore": number|null' ;;
+    wlbNotes) echo '"wlbNotes": string|null' ;;
+    wlbConfidence) echo '"wlbConfidence": "low"|"medium"|"high"|null' ;;
     aiProofScore) echo '"aiProofScore": number|null' ;;
     aiProofNotes) echo '"aiProofNotes": string|null' ;;
     *) echo "unknown field: $1" >&2; exit 1 ;;
@@ -87,6 +93,23 @@ if [ -z "$SCHEMA" ]; then
 fi
 SCHEMA="{${SCHEMA}}"
 
+# Scale guidance only for the scored fields that were actually requested.
+# A prompt that explains `aiProofScore` while asking for work-life balance
+# is the same waste Step 30's review caught on the role side: the model was
+# still told to determine a field the schema had stripped, and kept paying
+# for the searches.
+SCALE_GUIDANCE=""
+case "$FIELDS" in
+  *aiProofScore*)
+    SCALE_GUIDANCE="${SCALE_GUIDANCE} For aiProofScore, use a number from 0 (highly automatable / at risk) to 1 (durably needs human judgment or skill)."
+    ;;
+esac
+case "$FIELDS" in
+  *wlbScore*)
+    SCALE_GUIDANCE="${SCALE_GUIDANCE} For wlbScore, use a number from 0 (chronic overwork) to 1 (genuinely sustainable), and set wlbConfidence to how well-sourced that number is — an honest \"low\" is worth more than a confident guess, because this score changes how roles are ranked."
+    ;;
+esac
+
 PROMPT=$(cat <<EOF
 ${INSTRUCTIONS}
 
@@ -95,7 +118,7 @@ Context (JSON): ${CONTEXT}
 Research ONLY the fields present in the response shape below. The instructions above may mention fields that are not in it — those have already been answered from the posting's own structured data, so do not spend searches on them.
 
 Respond with ONLY a JSON object, no markdown fence, no commentary, matching this shape exactly: ${SCHEMA}
-Use null for any field you cannot confidently determine from real sources you found. For aiProofScore, use a number from 0 (highly automatable / at risk) to 1 (durably needs human judgment or skill).
+Use null for any field you cannot confidently determine from real sources you found.${SCALE_GUIDANCE}
 EOF
 )
 

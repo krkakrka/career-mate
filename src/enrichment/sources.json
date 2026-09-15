@@ -10,8 +10,8 @@
     "instructions": "Research whether this company has IPO'd, is private, or is reportedly planning to IPO, and assess how AI-proof / future-proof the company and its work seem, based on recent news, its industry, and public sentiment. Use publicly available information only."
   },
   "company_wlb": {
-    "requiresLogin": true,
+    "requiresLogin": false,
     "urlTemplate": null,
-    "instructions": "Extract a work-life-balance assessment from Glassdoor reviews (or a similar login-gated source) for this company: overall sentiment on hours, burnout, and culture, distilled to a 0-1 score and a short summary."
+    "instructions": "Assess this company's work-life balance from PUBLIC sources you can actually reach: Blind, Reddit (r/cscareerquestions and company-specific subreddits), levels.fyi comments, Hacker News threads, and engineering blog posts about how the team works. Glassdoor is login-gated \u2014 do not claim to have read it. Weigh hours, on-call load, burnout reports, and how recent the evidence is. Report wlbConfidence honestly: 'high' only when several independent, recent sources agree; 'medium' when the evidence is thin or mixed; 'low' when you found little beyond generic or second-hand impressions. A low-confidence answer is far more useful than a confident guess \u2014 this score moves how roles are ranked. Cite what you actually found in wlbNotes, including when you found almost nothing."
   }
 }

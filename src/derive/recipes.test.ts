@@ -23,6 +23,15 @@ function temporarilyAppend(filePath: string, text: string): void {
   fs.writeFileSync(filePath, original + text);
 }
 
+/** Edits one recipe's `instructions` in place, restoring the file afterwards. */
+function temporarilyEditInstructions(key: string): void {
+  const original = fs.readFileSync(sourcesPath, 'utf-8');
+  restore.push(() => fs.writeFileSync(sourcesPath, original));
+  const sources = JSON.parse(original) as Record<string, { instructions: string }>;
+  sources[key]!.instructions += ' (edited by a test)';
+  fs.writeFileSync(sourcesPath, JSON.stringify(sources, null, 2));
+}
+
 describe('structuralRecipeVersion', () => {
   it('changes when the extraction prompt changes', () => {
     const before = structuralRecipeVersion('role');
@@ -53,14 +62,36 @@ describe('structuralRecipeVersion', () => {
 });
 
 describe('researchRecipeVersion', () => {
-  it('changes when sources.json instructions change', () => {
+  it('changes when its own instructions change', () => {
     // `instructions` are prepended to the research prompt, so they are as
     // much part of the recipe as the script. Without this, editing an
     // instruction leaves every existing research derivation looking fresh
     // and the edited prompt never runs for anything already researched.
     const before = researchRecipeVersion('role');
-    temporarilyAppend(sourcesPath, '\n');
+    temporarilyEditInstructions('role_research');
     expect(researchRecipeVersion('role')).not.toBe(before);
+  });
+
+  it('ignores a change to another kind\'s instructions', () => {
+    // `sources.json` holds all three recipes. Hashing the whole file meant
+    // rewriting the WLB instructions invalidated every role and company
+    // research derivation too — three kinds re-researched to change one.
+    const beforeRole = researchRecipeVersion('role');
+    const beforeCompany = researchRecipeVersion('company');
+
+    temporarilyEditInstructions('company_wlb');
+
+    expect(researchRecipeVersion('role')).toBe(beforeRole);
+    expect(researchRecipeVersion('company')).toBe(beforeCompany);
+    expect(researchRecipeVersion('wlb')).not.toBe(beforeRole);
+  });
+
+  it('ignores a reformat of the file that changes no instruction', () => {
+    // Whitespace is not a prompt change, and treating it as one queues a
+    // paid re-research for every tracked entity.
+    const before = researchRecipeVersion('company');
+    temporarilyAppend(sourcesPath, '\n');
+    expect(researchRecipeVersion('company')).toBe(before);
   });
 
   it('is stable across calls when nothing changed', () => {
@@ -75,11 +106,8 @@ describe('researchRecipeVersion', () => {
     expect(researchRecipeVersion('role')).not.toBe(researchRecipeVersion('company'));
   });
 
-  it('still changes for both when the shared script or instructions change', () => {
-    const beforeRole = researchRecipeVersion('role');
-    const beforeCompany = researchRecipeVersion('company');
-    temporarilyAppend(sourcesPath, '\n');
-    expect(researchRecipeVersion('role')).not.toBe(beforeRole);
-    expect(researchRecipeVersion('company')).not.toBe(beforeCompany);
+  it('gives every kind its own identity', () => {
+    const versions = [researchRecipeVersion('role'), researchRecipeVersion('company'), researchRecipeVersion('wlb')];
+    expect(new Set(versions).size).toBe(3);
   });
 });

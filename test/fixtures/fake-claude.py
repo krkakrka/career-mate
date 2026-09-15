@@ -89,9 +89,6 @@ def answer_for(prompt, page):
     if 'Find current, real, open job listings' in prompt:
         return {'roles': []}
 
-    if 'work-life-balance' in prompt:
-        return {'wlbScore': 7, 'wlbNotes': 'fake-claude WLB note.'}
-
     if 'job posting page' in prompt:
         return {
             'title': 'Senior Backend Engineer',
@@ -103,13 +100,38 @@ def answer_for(prompt, page):
     if "company's own website" in prompt:
         return {'name': 'Globex Corporation', 'description': 'A fake-claude company description.'}
 
-    if 'aiProofScore' in prompt:
-        # research-web.sh — its declared shape decides whether this is the
-        # role half (comp/equity/remote) or the company half (IPO/AI-proof).
+    # research-web.sh, matched on each kind's *own* declared fields rather
+    # than on a shared trailing sentence. The three kinds are told apart by
+    # what they ask for, which is the only thing that cannot drift when the
+    # surrounding prose changes — an earlier version keyed the role half on
+    # the word "aiProofScore", which appeared only because the scale
+    # guidance mentioned a field that prompt had not requested.
+    if 'wlbScore' in prompt:
+        # CM_FAKE_CLAUDE_WLB shapes the answer, because the interesting WLB
+        # cases are the *asymmetric* ones — a score with an unusable
+        # confidence, or a confidence with no score — and the handler's
+        # consistency rule cannot be tested against a fixture that always
+        # returns both.
+        variant = os.environ.get('CM_FAKE_CLAUDE_WLB', '')
+        if variant == 'nothing-found':
+            return {'wlbScore': None, 'wlbNotes': 'fake-claude: found almost nothing.', 'wlbConfidence': None}
+        if variant == 'bad-confidence':
+            return {'wlbScore': 0.3, 'wlbNotes': 'fake-claude note.', 'wlbConfidence': 'very high'}
+        if variant == 'off-scale':
+            # A model answering on a 0-10 scale, which clamping used to turn
+            # into 1.0 — the best possible work-life balance.
+            return {'wlbScore': 7, 'wlbNotes': 'fake-claude note.', 'wlbConfidence': 'high'}
         return {
-            'salaryMin': 90000, 'salaryMax': 120000, 'equity': '0.05%', 'remoteEu': 'yes',
-            'ipoStatus': 'private', 'aiProofScore': 0.7, 'aiProofNotes': 'fake-claude note.',
+            'wlbScore': 0.65,
+            'wlbNotes': 'fake-claude: two Blind threads and one HN comment, all 2025 or later.',
+            'wlbConfidence': 'medium',
         }
+
+    if 'ipoStatus' in prompt or 'aiProofScore' in prompt:
+        return {'ipoStatus': 'private', 'aiProofScore': 0.7, 'aiProofNotes': 'fake-claude note.'}
+
+    if 'salaryMin' in prompt or 'equity' in prompt or 'remoteEu' in prompt:
+        return {'salaryMin': 90000, 'salaryMax': 120000, 'equity': '0.05%', 'remoteEu': 'yes'}
 
     return None
 

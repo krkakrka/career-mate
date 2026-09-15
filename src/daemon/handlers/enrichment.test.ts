@@ -7,7 +7,7 @@ import { openDb } from '../../db/client.js';
 import { createCompany, getCompanyById, listCompanies } from '../../db/repositories/companies.js';
 import { listEventsForEntity } from '../../db/repositories/events.js';
 import { listOperationalLogs } from '../../db/repositories/operational-logs.js';
-import type { JobRecord } from '../../db/repositories/jobs.js';
+import { enqueueJob, type JobRecord } from '../../db/repositories/jobs.js';
 import { createRole, getRoleById, updateResearchFields } from '../../db/repositories/roles.js';
 import { handleEnrichmentJob, resolveRoleCompany } from './enrichment.js';
 import { restoreEnv } from '../../../test/helpers/env.js';
@@ -126,26 +126,115 @@ describe('resolveRoleCompany', () => {
   });
 });
 
-describe('company-wlb job — no urlTemplate configured (the shipped default)', () => {
-  it('skips gracefully with a clear event instead of attempting doomed browser automation, no live calls', async () => {
+describe('company-wlb job — public sources, no login', () => {
+  /**
+   * A company plus a real queue row.
+   *
+   * `recordDerivation` writes `job_id`, which is a foreign key — `fakeJob`'s
+   * hardcoded id only happens to exist in tests that created a role, because
+   * `createRole` enqueues one.
+   */
+  /** A second job for a company that already has one — the derivation key must differ for the pass to run. */
+  function companyWithJob2(companyId: number): JobRecord {
+    // The context is the company's own fields, which have not changed, so
+    // the second pass would skip as fresh. Nudging the name is what makes
+    // it a genuinely new input rather than a re-run.
+    db.prepare("UPDATE companies SET name = name || ' Inc' WHERE id = ?").run(companyId);
+    return enqueueJob(db, { topic: 'enrichment', payload: { kind: 'company-wlb', companyId } });
+  }
+
+  function companyWithJob(): { companyId: number; job: JobRecord } {
     const company = createCompany(db, 'https://acme.example.com', 'Acme');
+    const job = enqueueJob(db, { topic: 'enrichment', payload: { kind: 'company-wlb', companyId: company.id } });
+    return { companyId: company.id, job };
+  }
 
-    // No live claude -p / Playwright call should happen here at all — WLB
-    // is login-gated, so without a real urlTemplate in sources.json there
-    // is nothing reachable to research. This must stay fast and free.
-    const start = Date.now();
-    await handleEnrichmentJob(db, fakeJob({ kind: 'company-wlb', companyId: company.id }));
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1000);
+  it('researches WLB and records how well-sourced the answer is', async () => {
+    // The source used to be Glassdoor behind a login, which `claude -p`'s
+    // web search cannot see past — so the job short-circuited and WLB was
+    // never populated for anyone. It now reads public discussion, and the
+    // confidence is what keeps a thin signal from moving the ranking as
+    // much as a well-evidenced one.
+    const { companyId, job } = companyWithJob();
 
-    const updated = getCompanyById(db, company.id)!;
+    await handleEnrichmentJob(db, job);
+
+    const updated = getCompanyById(db, companyId)!;
+    expect(updated.wlb_score).not.toBeNull();
+    expect(['low', 'medium', 'high']).toContain(updated.wlb_confidence);
+    expect(updated.wlb_notes).toBeTruthy();
+  }, 60_000);
+
+  it('drops a confidence it cannot read rather than keeping the last one', async () => {
+    // Two passes. The first stores a well-sourced 0.65/medium; the second
+    // returns a score with an unusable confidence. Under COALESCE the old
+    // `medium` survived and un-shrank the new number — the `salary_currency`
+    // hazard on a different column.
+    const { companyId, job } = companyWithJob();
+    await handleEnrichmentJob(db, job);
+    expect(getCompanyById(db, companyId)!.wlb_confidence).toBe('medium');
+
+    process.env.CM_FAKE_CLAUDE_WLB = 'bad-confidence';
+    try {
+      await handleEnrichmentJob(db, companyWithJob2(companyId));
+    } finally {
+      delete process.env.CM_FAKE_CLAUDE_WLB;
+    }
+
+    const updated = getCompanyById(db, companyId)!;
+    expect(updated.wlb_score).toBe(0.3);
+    expect(updated.wlb_confidence).toBeNull();
+  }, 60_000);
+
+  it('clears a stale score when a later pass finds nothing', async () => {
+    // The prompt explicitly asks the model to say when it found almost
+    // nothing, so `null` here is a *result*. Under COALESCE the previous
+    // score stayed put with the new "found nothing" notes beside it, and
+    // the ranking went on using it at full weight.
+    const { companyId, job } = companyWithJob();
+    await handleEnrichmentJob(db, job);
+    expect(getCompanyById(db, companyId)!.wlb_score).toBe(0.65);
+
+    process.env.CM_FAKE_CLAUDE_WLB = 'nothing-found';
+    try {
+      await handleEnrichmentJob(db, companyWithJob2(companyId));
+    } finally {
+      delete process.env.CM_FAKE_CLAUDE_WLB;
+    }
+
+    const updated = getCompanyById(db, companyId)!;
     expect(updated.wlb_score).toBeNull();
+    expect(updated.wlb_confidence).toBeNull();
+    expect(updated.wlb_notes).toMatch(/found almost nothing/);
+  }, 60_000);
 
-    const events = listEventsForEntity(db, 'company', company.id);
-    const skipped = events.find((e) => e.type === 'company.wlb_skipped');
-    expect(skipped).toBeDefined();
-    expect(JSON.parse(skipped!.context!).reason).toMatch(/urlTemplate/);
-  });
+  it('refuses a score on a scale it was not asked for', async () => {
+    // Clamping turned a 0-10 answer of 7 into 1.0 — the best possible
+    // work-life balance — and at `high` confidence that moves the ranking
+    // at full weight. A value outside 0-1 is evidence of a different scale,
+    // not a value to squeeze into range.
+    const { companyId, job } = companyWithJob();
+    process.env.CM_FAKE_CLAUDE_WLB = 'off-scale';
+    try {
+      await handleEnrichmentJob(db, job);
+    } finally {
+      delete process.env.CM_FAKE_CLAUDE_WLB;
+    }
+
+    const updated = getCompanyById(db, companyId)!;
+    expect(updated.wlb_score).toBeNull();
+    expect(updated.wlb_confidence).toBeNull();
+  }, 60_000);
+
+  it('does not open a browser', async () => {
+    // The only daemon caller of the authenticated browser path was this
+    // job. `cm auth check` and `cm auth record-har` still use it; nothing
+    // in enrichment does.
+    const { job } = companyWithJob();
+    await handleEnrichmentJob(db, job);
+
+    expect(fs.existsSync(path.join(tempDir, 'browser-profile'))).toBe(false);
+  }, 60_000);
 });
 
 describe('role-structural with a JSON-LD JobPosting on the page', () => {

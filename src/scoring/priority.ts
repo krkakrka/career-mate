@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { loadPreferences, type Preferences } from '../config/preferences.js';
 import { loadScoringWeights, type ScoringWeights } from '../config/scoring.js';
+import { shrinkToNeutral } from '../domain/confidence.js';
 import { getCompanyById, type Company } from '../db/repositories/companies.js';
 import type { Role } from '../db/repositories/roles.js';
 
@@ -52,9 +53,19 @@ function aiProofTerm(company: Company | null): number {
   return clamp01(company.ai_proof_score);
 }
 
+/**
+ * Work-life balance, shrunk toward neutral by how well-sourced it is.
+ *
+ * The one enriched field that cannot be made factual: comp has levels.fyi,
+ * remote/EU has the posting's own declaration, IPO status is a matter of
+ * record. WLB is a model summarising public discussion, and a company with
+ * a hundred public data points and one with none would otherwise move this
+ * ranking equally. `shrinkToNeutral` is what stops a thin signal from
+ * outweighing a salary.
+ */
 function wlbTerm(company: Company | null): number {
   if (company?.wlb_score == null) return 0.5;
-  return clamp01(company.wlb_score);
+  return clamp01(shrinkToNeutral(company.wlb_score, company.wlb_confidence));
 }
 
 /** Minimal for now: does the role title contain any preferred keyword. Richer matching (seniority, etc.) belongs to discover, a later step. */

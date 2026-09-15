@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
-import { fetchAuthenticatedPage } from '../../browser/profile.js';
 import { loadPreferences } from '../../config/preferences.js';
+import { CONFIDENCE_LEVELS, type Confidence } from '../../domain/confidence.js';
 import {
   findOrCreateCompanyByUrl,
   getCompanyById,
@@ -17,7 +17,7 @@ import {
   updateResearchFields as updateRoleResearchFields,
   updateStructuralFields as updateRoleStructuralFields,
 } from '../../db/repositories/roles.js';
-import { contextKey, recipeVersion, sha256 } from '../../derive/keys.js';
+import { contextKey, sha256 } from '../../derive/keys.js';
 import { researchRecipeVersion, structuralRecipeVersion } from '../../derive/recipes.js';
 import { recordDerivation, skipIfFresh } from '../../derive/record.js';
 import { readRoleResearchPrefill, roleResearchSourceKey } from '../../derive/role-research-key.js';
@@ -45,7 +45,6 @@ import { hashUrl, readSnapshotHtml, readSnapshotText, snapshotPage } from '../..
 
 const structuralScript = fileURLToPath(new URL('../../enrichment/scripts/extract-structural.sh', import.meta.url));
 const researchWebScript = fileURLToPath(new URL('../../enrichment/scripts/research-web.sh', import.meta.url));
-const extractWlbScript = fileURLToPath(new URL('../../enrichment/scripts/extract-wlb.sh', import.meta.url));
 
 export type EnrichmentJobPayload =
   // `force` on the two structural kinds means only "take a new snapshot,
@@ -86,6 +85,7 @@ interface CompanyResearchExtraction {
 interface WlbExtraction {
   wlbScore?: number | null;
   wlbNotes?: string | null;
+  wlbConfidence?: string | null;
 }
 
 export async function handleEnrichmentJob(db: Database.Database, job: JobRecord): Promise<void> {
@@ -361,6 +361,17 @@ export function resolveRoleCompany(db: Database.Database, roleId: number, extrac
   }
 }
 
+/** Only the three levels the prompt offers; anything else is treated as unstated, which `confidenceWeight` reads as lowest. */
+function normalizeConfidence(value: unknown): Confidence | null {
+  return typeof value === 'string' && (CONFIDENCE_LEVELS as readonly string[]).includes(value)
+    ? (value as Confidence)
+    : null;
+}
+
+function inUnitRange(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 function normalizeRemoteEu(value: string | null | undefined): 'yes' | 'no' | 'unknown' | null {
   return value === 'yes' || value === 'no' || value === 'unknown' ? value : null;
 }
@@ -542,95 +553,53 @@ async function handleCompanyResearch(db: Database.Database, companyId: number, j
   apply.immediate();
 }
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-function substituteTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (_match, key: string) => vars[key] ?? '');
-}
 
 async function handleCompanyWlb(db: Database.Database, companyId: number, jobId: number): Promise<void> {
   const company = getCompanyById(db, companyId);
   if (!company) throw new Error(`Company #${companyId} not found`);
 
   const recipe = getSourceRecipe('company_wlb');
-  if (!recipe.urlTemplate) {
-    // WLB is login-gated (Glassdoor et al.) — unlike comp/IPO/AI-proof
-    // research, there's no "fall back to open web search" option here,
-    // since claude -p's web search can't see past a login wall. Without a
-    // real URL template this job can't do anything useful yet; that's
-    // expected until one is supplied (per the original design: "you'll
-    // supply real example URLs to tighten these"), not an error.
-    recordEvent(db, {
-      entityType: 'company',
-      entityId: companyId,
-      type: 'company.wlb_skipped',
-      context: {
-        reason:
-          'no urlTemplate configured for company_wlb in sources.json — add one (e.g. a Glassdoor reviews URL pattern) to enable WLB research',
-      },
-    });
-    return;
-  }
+  const context = buildCompanyResearchContext(company);
 
-  const url = substituteTemplate(recipe.urlTemplate, {
-    companyName: company.name ?? '',
-    companySlug: slugify(company.name ?? ''),
-  });
-  const html = await fetchAuthenticatedPage(url).catch((error: unknown) => {
-    // The only browser fetch the daemon makes, and the motivating failure
-    // for tracing at all. The trace path lives on the error object, and the
-    // job's own failure record keeps only `error.message` — so without this
-    // a multi-megabyte trace is written, never mentioned anywhere, and
-    // pruned away unseen after twenty more failures.
-    const tracePath = (error as { tracePath?: unknown })?.tracePath;
-    if (typeof tracePath === 'string') {
-      tryRecordOperationalLog(db, {
-        severity: 'warn',
-        outcome: 'failed',
-        component: 'enrichment',
-        action: 'browser-fetch-trace',
-        entityType: 'company',
-        entityId: companyId,
-        jobId,
-        context: { url, tracePath },
-      });
-    }
-    throw error;
-  });
-  // The only fetch that does not go through the page store (it needs the
-  // authenticated browser profile), so its source key is the hash of the
-  // HTML it returned rather than a snapshot's text_hash.
-  const key = { sourceKey: sha256(html), recipeVersion: recipeVersion(extractWlbScript) };
+  // Keyed like the other research kinds now. It used to key on the hash of
+  // a browser-fetched page, because the source was Glassdoor behind a
+  // login; there is no page any more.
+  const key = { sourceKey: contextKey(context), recipeVersion: researchRecipeVersion('wlb') };
   if (skipIfFresh(db, 'company', companyId, 'company_wlb', key)) return;
 
   const { data, usage } = await runTrackedExtraction(
     db,
     { entityType: 'company', entityId: companyId, kind: 'company_wlb', jobId },
-    extractWlbScript,
-    [],
-    html,
+    researchWebScript,
+    ['wlb', recipe.instructions],
+    context,
   );
   const extraction = data as WlbExtraction;
 
-  const wlbScore = typeof extraction.wlbScore === 'number' ? extraction.wlbScore : null;
+  // Refused, not clamped. A value outside 0-1 is evidence the model
+  // answered on a different scale, not a value to squeeze into range:
+  // clamping turned a 0-10 answer of 7 into 1.0 — the best possible
+  // work-life balance — which at `high` confidence moves the ranking at
+  // full weight. Same rule as the salary section of CLAUDE.md: refuse
+  // rather than convert.
+  const wlbScore = inUnitRange(extraction.wlbScore) ? extraction.wlbScore : null;
+  // The confidence only means anything alongside a score. Storing one
+  // without the other would leave `wlbTerm` shrinking a number that is not
+  // there, or trusting a number with no stated provenance.
+  const wlbConfidence = wlbScore === null ? null : normalizeConfidence(extraction.wlbConfidence);
 
   const apply = db.transaction(() => {
     updateCompanyResearchFields(db, companyId, {
       wlbScore,
+      wlbConfidence,
       wlbNotes: extraction.wlbNotes ?? null,
     });
 
     recordEvent(db, {
       entityType: 'company',
       entityId: companyId,
-      type: 'company.wlb_completed',
-      context: { wlbScore },
+      type: 'company.wlb_researched',
+      context: { wlbScore, wlbConfidence },
     });
 
     recordDerivation(db, { entityType: 'company', entityId: companyId, kind: 'company_wlb', key, usage, jobId });

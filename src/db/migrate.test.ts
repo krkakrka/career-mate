@@ -148,6 +148,7 @@ describe('0002_nullable_role_company migration', () => {
       '0009_role_salary_currency.sql',
       '0010_job_origin.sql',
       '0011_model_call_origin.sql',
+      '0012_company_wlb_confidence.sql',
     ]);
     db.close();
   });

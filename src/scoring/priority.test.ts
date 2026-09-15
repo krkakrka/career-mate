@@ -187,10 +187,10 @@ describe('computePriorityScore — remote_eu_match', () => {
 describe('computePriorityScore — ai_proof / wlb', () => {
   const weights = { ...EQUAL_WEIGHTS, comp_fit: 0, remote_eu_match: 0, ai_proof: 1, wlb: 1, preference_match: 0, company_preference: 0 };
 
-  it('uses the stored 0..1 score directly, and is neutral when null', () => {
+  it('uses a well-sourced score directly, and is neutral when null', () => {
     const withScores = computePriorityScore({
       role: baseRole() as never,
-      company: baseCompany({ ai_proof_score: 0.8, wlb_score: 0.2 }) as never,
+      company: baseCompany({ ai_proof_score: 0.8, wlb_score: 0.2, wlb_confidence: 'high' }) as never,
       weights,
       preferences: NO_PREFERENCES,
     });
@@ -205,10 +205,36 @@ describe('computePriorityScore — ai_proof / wlb', () => {
     expect(withoutScores).toBeCloseTo(1, 5); // 0.5 + 0.5
   });
 
+  it('shrinks a thinly-sourced WLB score toward neutral', () => {
+    // WLB is the one enriched field that cannot be made factual — it is a
+    // model summarising public discussion — so a company with a hundred
+    // data points and one with none must not move the ranking equally.
+    // `ai_proof` is unaffected: it is a judgement about the work, not a
+    // sentiment reading that varies with how much was written about it.
+    const score = computePriorityScore({
+      role: baseRole() as never,
+      company: baseCompany({ ai_proof_score: 0.8, wlb_score: 0.2, wlb_confidence: 'low' }) as never,
+      weights,
+      preferences: NO_PREFERENCES,
+    });
+    expect(score).toBeCloseTo(0.8 + 0.425, 5); // 0.5 + (0.2 - 0.5) * 0.25
+  });
+
+  it('treats an unrecorded confidence as the lowest, not the highest', () => {
+    // Every company enriched before the column existed is in this state.
+    const score = computePriorityScore({
+      role: baseRole() as never,
+      company: baseCompany({ ai_proof_score: 0.5, wlb_score: 1, wlb_confidence: null }) as never,
+      weights,
+      preferences: NO_PREFERENCES,
+    });
+    expect(score).toBeCloseTo(0.5 + 0.625, 5);
+  });
+
   it('clamps an out-of-range score defensively', () => {
     const score = computePriorityScore({
       role: baseRole() as never,
-      company: baseCompany({ ai_proof_score: 1.5, wlb_score: -0.5 }) as never,
+      company: baseCompany({ ai_proof_score: 1.5, wlb_score: -0.5, wlb_confidence: 'high' }) as never,
       weights,
       preferences: NO_PREFERENCES,
     });

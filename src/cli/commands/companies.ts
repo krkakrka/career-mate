@@ -39,7 +39,13 @@ function printCompanyDetail(company: Company, markers: Map<string, string>): voi
   console.log(`Connections: ${company.connections ?? '(none)'}`);
   console.log(`IPO status: ${company.ipo_status ?? '(unknown)'}${research}`);
   console.log(`AI-proof score: ${company.ai_proof_score ?? '(unknown)'}${company.ai_proof_notes ? `  — ${company.ai_proof_notes}` : ''}${research}`);
-  console.log(`WLB score: ${company.wlb_score ?? '(unknown)'}${company.wlb_notes ? `  — ${company.wlb_notes}` : ''}`);
+  // The confidence is shown next to the score, not buried in the notes:
+  // this is the one enriched field that is a model reading sentiment rather
+  // than a fact, and how well-sourced it is changes what the number means.
+  const wlbConfidence = company.wlb_score == null ? '' : ` (${company.wlb_confidence ?? 'unstated'} confidence)`;
+  console.log(
+    `WLB score: ${company.wlb_score ?? '(unknown)'}${wlbConfidence}${company.wlb_notes ? `  — ${company.wlb_notes}` : ''}`,
+  );
   console.log(`Created: ${company.created_at}`);
 }
 
