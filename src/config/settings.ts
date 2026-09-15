@@ -93,7 +93,25 @@ export interface Settings {
    * than failing.
    */
   discover_max_new_roles_per_run: number;
+  /**
+   * Where notifications are delivered.
+   *
+   * `terminal` prints to the daemon's log, which is where it has always
+   * gone. `macos` draws a banner; `both` does each. A payload may still
+   * name a channel explicitly and wins when it does.
+   *
+   * This setting is the point of the macOS channel existing at all: no
+   * producer sets a channel, so without something selecting one, `macos`
+   * would be typed and unreachable — shipping dead the way `company_wlb`
+   * did.
+   */
+  notification_channel: NotificationChannel;
 }
+
+/** Where a notification is delivered. */
+export type NotificationChannel = 'terminal' | 'macos' | 'both';
+
+export const NOTIFICATION_CHANNELS: readonly NotificationChannel[] = ['terminal', 'macos', 'both'];
 
 const DEFAULT_SETTINGS: Settings = {
   recruiter_nudge_days: 7,
@@ -107,6 +125,7 @@ const DEFAULT_SETTINGS: Settings = {
   daemon_idle_exit_minutes: 30,
   prune_after_days: 90,
   discover_max_new_roles_per_run: 25,
+  notification_channel: 'terminal',
   browser_trace: 'on-failure',
   browser_trace_keep: 20,
 };
@@ -143,6 +162,11 @@ export function loadSettings(): Settings {
     stale_running_job_minutes: numberOr(settings.stale_running_job_minutes, DEFAULT_SETTINGS.stale_running_job_minutes),
     daemon_idle_exit_minutes: numberOr(settings.daemon_idle_exit_minutes, DEFAULT_SETTINGS.daemon_idle_exit_minutes),
     prune_after_days: positiveOr(settings.prune_after_days, DEFAULT_SETTINGS.prune_after_days),
+    notification_channel: oneOfOr(
+      settings.notification_channel,
+      NOTIFICATION_CHANNELS,
+      DEFAULT_SETTINGS.notification_channel,
+    ),
     discover_max_new_roles_per_run: positiveOr(
       settings.discover_max_new_roles_per_run,
       DEFAULT_SETTINGS.discover_max_new_roles_per_run,

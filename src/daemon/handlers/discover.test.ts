@@ -33,10 +33,14 @@ let originalDataDir: string | undefined;
 let db: Database.Database;
 
 beforeEach(() => {
-  // Required by CLAUDE.md: if `boardListedGate` ever regressed to the real
-  // gate, this suite would fetch over the network and write snapshots into
-  // the project's own `.data` before failing.
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-discover-handler-'));
+  // Required by CLAUDE.md, and load-bearing twice over: if
+  // `boardListedGate` ever regressed to the real gate this suite would
+  // fetch over the network and write snapshots into the project's own
+  // `.data`; and `handleNotificationJob` reads `settings.json`, which
+  // `loadJsonConfig` *creates* when missing.
+  originalDataDir = process.env.CM_DATA_DIR;
+  process.env.CM_DATA_DIR = tempDir;
   db = openDb(path.join(tempDir, 'career-mate.db'));
 });
 
@@ -167,7 +171,9 @@ describe('applyDiscoveredRoles', () => {
 
     const notificationJob = claimNextJob(db, 'notification');
     expect(notificationJob).toBeDefined();
-    handleNotificationJob(db, notificationJob!);
+    // Awaited: the handler is async now, and a floating promise turns a
+    // rejection into an unhandled rejection rather than a test failure.
+    await handleNotificationJob(db, notificationJob!);
 
     const events = listEventsForEntity(db, 'company', company.id);
     expect(events.filter((e) => e.type === 'company.discover_completed')).toHaveLength(1);

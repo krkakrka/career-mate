@@ -168,6 +168,18 @@ command asked for. Origin propagates through `AsyncLocalStorage`, not a module g
 several drain slots through `Promise.all`, and a shared variable would be overwritten by whichever
 handler interleaved.
 
+## Untrusted text must never reach an interpreter
+
+Role and company titles come from fetched pages by way of the model. AppleScript can run shell
+commands, so `src/notify/macos.ts` builds a fixed `on run argv` script and passes every dynamic value
+through `execFile`'s argument array — plus a `--` separator, without which a title starting with `-`
+lands in `osascript`'s *option* position and a message of exactly `-e` makes the next argument script
+source.
+
+The same rule is why the `claude` scripts carry `--tools`/`--setting-sources ""`/`--strict-mcp-config`.
+If you add another interpreter — `osascript`, a shell, a template engine — the text goes in as an
+argument, never as source.
+
 ## Delivery process
 
 Each step: tests first, implement, then an independent review (`/code-review`), address every
