@@ -157,3 +157,22 @@ describe('cm roles list --sort priority', () => {
     expect(reordered[1]).toContain('high.example.com');
   });
 });
+
+describe('cm roles form', () => {
+  it('says so plainly when the board does not publish its form', () => {
+    // The ordinary case: most boards publish postings without publishing
+    // their questions, which is an answer rather than a failure.
+    runCli(['roles', 'add', 'https://jobs.lever.co/netlify/abc123'], { dataDir });
+
+    const result = runCli(['roles', 'form', '1'], { dataDir });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('does not publish its application form');
+  });
+
+  it('reports a missing role rather than reaching for the network', () => {
+    const result = runCli(['roles', 'form', '999'], { dataDir });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('No role #999');
+  });
+});

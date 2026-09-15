@@ -19,3 +19,28 @@ export function reportKnownErrors(knownErrors: ErrorClass[], action: () => void)
     throw error;
   }
 }
+
+/**
+ * The async counterpart, for actions that await something.
+ *
+ * Needed because Commander does not catch a rejected action: the promise
+ * escapes to `parseAsync`, the top-level handler in `index.ts` records the
+ * run as `unhandled: true`, and the user gets a stack trace where every
+ * other command prints one clean line. A mistyped id should not look like a
+ * crash, nor pollute the error counts `cm status` and `cm logs` report.
+ */
+export async function reportKnownErrorsAsync(
+  knownErrors: ErrorClass[],
+  action: () => Promise<void>,
+): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    if (knownErrors.some((ErrorType) => error instanceof ErrorType)) {
+      console.error((error as Error).message);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+}

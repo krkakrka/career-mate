@@ -23,10 +23,13 @@ import {
 import { loadPreferences } from '../../config/preferences.js';
 import { loadScoringWeights } from '../../config/scoring.js';
 import { ROLE_STATUSES } from '../../domain/role-status.js';
+import { fetchApplicationForm } from '../../forms/index.js';
+import { FetchError } from '../../pages/fetch.js';
+import { renderForm } from './form-view.js';
 import { scoreRole, scoreRoleWithConfig } from '../../scoring/priority.js';
 import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
 import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
-import { reportKnownErrors } from '../handle-known-errors.js';
+import { reportKnownErrors, reportKnownErrorsAsync } from '../handle-known-errors.js';
 import {
   parseDate,
   parseHttpUrl,
@@ -60,6 +63,7 @@ function printRoleDetail(role: Role, markers: Map<string, string>, score: number
   console.log(`Priority score: ${score.toFixed(2)}`);
   console.log(`Created: ${role.created_at}`);
 }
+
 
 export function registerRolesCommand(program: Command): void {
   const roles = program.command('roles').description('Manage tracked roles');
@@ -195,6 +199,33 @@ export function registerRolesCommand(program: Command): void {
           console.log(`  ${note.occurred_at}  [${note.stage}] ${note.notes}`);
         }
       }
+    });
+
+  roles
+    .command('form')
+    .description("Show a posting's application form — how many questions, which are required, how much writing")
+    .argument('<id>', 'Role id', parsePositiveInt)
+    .action(async (id: number) => {
+      // Async-aware, because Commander does not catch a rejected action: a
+      // mistyped id would otherwise reach the user as a stack trace and be
+      // recorded as an unhandled crash in `cm status`.
+      await reportKnownErrorsAsync([...KNOWN_ERRORS, FetchError], async () => {
+        const db = getDb();
+        const role = getRoleById(db, id);
+        if (!role) throw new NotFoundError(`No role #${id}`);
+
+        const form = await fetchApplicationForm(role.url);
+        if (!form) {
+          // An ordinary answer, not a failure: most boards publish postings
+          // without publishing their questions.
+          console.log(`#${role.id} ${role.title ?? role.url}`);
+          console.log('This board does not publish its application form. Open the posting to see it.');
+          return;
+        }
+
+        const heading = `#${role.id} ${form.title ?? role.title ?? role.url}`;
+        for (const line of renderForm(form, heading, role.url)) console.log(line);
+      });
     });
 
   roles

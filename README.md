@@ -65,6 +65,8 @@ cm roles add/list/show/set-status/set-reapply     # add is idempotent; --force t
 cm recruiters ping/respond/list
 cm interview-note add
 cm tips <role-id>
+cm roles form <id>         # what the application form asks: how many questions, which required,
+                           #   how much writing (Ashby + Greenhouse; free, no model call)
 cm refresh                 # re-check tracked roles for closure (fire-and-forget)
 cm discover                # scan tracked companies for new matching roles (fire-and-forget)
 cm status                  # pipeline digest: counts, stale roles, overdue follow-ups, reapply dates,
