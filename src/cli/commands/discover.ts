@@ -25,7 +25,8 @@ export function registerDiscoverCommand(program: Command): void {
       }
       ensureDaemonRunning();
       console.log(
-        `Scanning ${companies.length} tracked compan${companies.length === 1 ? 'y' : 'ies'} for new roles in the background (one web search per company) — check \`cm inbox\` for what's found.`,
+        `Scanning ${companies.length} tracked compan${companies.length === 1 ? 'y' : 'ies'} for new roles in the background — check \`cm inbox\` for what's found.\n` +
+          `Companies whose job board is known are read from it for free; the rest cost one web search each.`,
       );
     });
 }

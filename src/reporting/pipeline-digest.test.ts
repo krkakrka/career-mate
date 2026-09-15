@@ -24,6 +24,7 @@ const SETTINGS: Settings = {
   browser_trace: 'on-failure',
   browser_trace_keep: 20,
   prune_after_days: 90,
+  discover_max_new_roles_per_run: 25,
 };
 
 let tempDir: string;

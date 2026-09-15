@@ -7,11 +7,14 @@ import type { Preferences } from '../../config/preferences.js';
 import { openDb } from '../../db/client.js';
 import { createCompany } from '../../db/repositories/companies.js';
 import { listEventsForEntity } from '../../db/repositories/events.js';
-import { claimNextJob, listJobs } from '../../db/repositories/jobs.js';
+import { claimNextJob, enqueueJob, listJobs } from '../../db/repositories/jobs.js';
 import { createRole, listRoles } from '../../db/repositories/roles.js';
 import type { GateVerdict } from '../../derive/discover-gate.js';
-import { applyDiscoveredRoles } from './discover.js';
+import { boardFromRoleUrls } from '../../discover/board.js';
+import { listOperationalLogs } from '../../db/repositories/operational-logs.js';
+import { applyDiscoveredRoles, discoverViaBoard } from './discover.js';
 import { handleNotificationJob } from './notification.js';
+import { restoreEnv } from '../../../test/helpers/env.js';
 
 const NO_KEYWORDS: Preferences = {
   titleKeywords: [],
@@ -22,16 +25,23 @@ const NO_KEYWORDS: Preferences = {
 };
 
 const BACKEND_ONLY: Preferences = { ...NO_KEYWORDS, titleKeywords: ['backend'] };
+/** The board path refuses to run without a title filter, so its tests need one. */
+const ENGINEER_ONLY: Preferences = { ...NO_KEYWORDS, titleKeywords: ['engineer', 'designer'] };
 
 let tempDir: string;
+let originalDataDir: string | undefined;
 let db: Database.Database;
 
 beforeEach(() => {
+  // Required by CLAUDE.md: if `boardListedGate` ever regressed to the real
+  // gate, this suite would fetch over the network and write snapshots into
+  // the project's own `.data` before failing.
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-discover-handler-'));
   db = openDb(path.join(tempDir, 'career-mate.db'));
 });
 
 afterEach(() => {
+  restoreEnv('CM_DATA_DIR', originalDataDir);
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -112,17 +122,17 @@ describe('applyDiscoveredRoles', () => {
   it('records a company.discover_completed event summarizing the run, even with zero candidates', async () => {
     const company = createCompany(db, 'https://acme.example.com', 'Acme');
 
-    await applyDiscoveredRoles(db, company.id, { roles: [] }, NO_KEYWORDS, { gate: alwaysOpen });
+    await applyDiscoveredRoles(db, company.id, { roles: [] }, ENGINEER_ONLY, { gate: alwaysOpen });
 
     const events = listEventsForEntity(db, 'company', company.id);
     const completed = events.find((e) => e.type === 'company.discover_completed');
     expect(completed).toBeDefined();
-    expect(JSON.parse(completed!.context!)).toEqual({ candidatesFound: 0, created: 0, skipped: 0, closed: 0 });
+    expect(JSON.parse(completed!.context!)).toEqual({ candidatesFound: 0, created: 0, skipped: 0, closed: 0, capped: 0 });
   });
 
   it('enqueues a notification job only when at least one role was created', async () => {
     const companyWithNone = createCompany(db, 'https://none.example.com', 'None Co');
-    await applyDiscoveredRoles(db, companyWithNone.id, { roles: [] }, NO_KEYWORDS, { gate: alwaysOpen });
+    await applyDiscoveredRoles(db, companyWithNone.id, { roles: [] }, ENGINEER_ONLY, { gate: alwaysOpen });
     expect(claimNextJob(db, 'notification')).toBeUndefined();
 
     const companyWithOne = createCompany(db, 'https://one.example.com', 'One Co');
@@ -287,7 +297,7 @@ describe('gate ordering and budget', () => {
 
     // A tracked role whose page has since closed is still a duplicate.
     const closed = async (): Promise<GateVerdict> => ({ track: false, reason: 'http-gone', detail: 'gone' });
-    const result = await applyDiscoveredRoles(db, company.id, { roles: [{ title: 'E', url }] }, NO_KEYWORDS, {
+    const result = await applyDiscoveredRoles(db, company.id, { roles: [{ title: 'E', url }] }, ENGINEER_ONLY, {
       gate: closed,
     });
 
@@ -313,8 +323,10 @@ describe('gate ordering and budget', () => {
       { gate: rejectDead },
     );
 
-    expect(result).toEqual({ created: 1, skipped: 1, closed: 1 });
-    expect(result.created + result.skipped + result.closed).toBe(3);
+    expect(result).toEqual({ created: 1, skipped: 1, closed: 1, capped: 0 });
+    // `capped` is part of the same partition — a consumer adding the
+    // counts up must still reach the candidate total.
+    expect(result.created + result.skipped + result.closed + result.capped).toBe(3);
   });
 
   it('stops gating once its time budget is spent, rather than overrunning the stale-job sweep', async () => {
@@ -331,7 +343,7 @@ describe('gate ordering and budget', () => {
       url: `https://acme.example.com/jobs/${index}`,
     }));
 
-    const result = await applyDiscoveredRoles(db, company.id, { roles }, NO_KEYWORDS, {
+    const result = await applyDiscoveredRoles(db, company.id, { roles }, ENGINEER_ONLY, {
       gate: slowGate,
       gateBudgetMs: 30,
     });
@@ -343,5 +355,200 @@ describe('gate ordering and budget', () => {
     // behaviour before this gate existed.
     expect(gateCalls).toBeLessThan(roles.length);
     expect(result.created).toBe(roles.length);
+  });
+});
+
+describe('discoverViaBoard', () => {
+  const ASHBY_ROLE = 'https://jobs.ashbyhq.com/ramp/34413f8d-26bf-4bbc-8ade-eb309a0e2245';
+
+  function trackedCompanyOnAshby(): number {
+    const company = createCompany(db, 'https://ramp.example.com', 'Ramp');
+    createRole(db, { companyId: company.id, url: ASHBY_ROLE });
+    return company.id;
+  }
+
+  /**
+   * A real job row, because `operational_logs.job_id` is a foreign key:
+   * logging against an id that does not exist violates it, and
+   * `tryRecordOperationalLog` swallows the failure — so the log silently
+   * vanishes and the test sees nothing.
+   */
+  function realJobId(): number {
+    return enqueueJob(db, { topic: 'discovery', payload: { kind: 'company-discover', companyId: 1 } }).id;
+  }
+
+  it('creates roles from the board listing without touching the model', async () => {
+    // `cm discover` pays one sonnet web search per tracked company. A board
+    // we can prove from a tracked role URL publishes the whole list free.
+    const companyId = trackedCompanyOnAshby();
+
+    const used = await discoverViaBoard(db, companyId, realJobId(), ENGINEER_ONLY, {
+      fetchPostings: async () => [
+        { title: 'Staff Engineer', url: 'https://jobs.ashbyhq.com/ramp/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' },
+        { title: 'Designer', url: 'https://jobs.ashbyhq.com/ramp/bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb' },
+      ],
+    });
+
+    expect(used).toBe(true);
+    const urls = listRoles(db, { companyId, includeTerminal: true }).map((role) => role.url);
+    expect(urls).toContain('https://jobs.ashbyhq.com/ramp/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa');
+    expect(urls.length).toBe(3); // the seed role plus the two discovered
+  });
+
+  it('does not re-fetch each candidate to ask whether it is open', async () => {
+    // Step 31's gate exists because a *model* surfaces dead URLs. A board's
+    // own listing cannot, so gating would spend a request per candidate
+    // confirming what the publisher just said.
+    //
+    // Asserted by counting the gate the *caller* would have used: an
+    // uninstrumented version of this counted a variable nothing ever
+    // incremented, and passed vacuously.
+    const companyId = trackedCompanyOnAshby();
+    let gateCalls = 0;
+    const countingGate = async (): Promise<GateVerdict> => {
+      gateCalls++;
+      return { track: true, reason: 'open' };
+    };
+
+    await applyDiscoveredRoles(
+      db,
+      companyId,
+      { roles: [{ title: 'Staff Engineer', url: 'https://jobs.ashbyhq.com/ramp/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' }] },
+      ENGINEER_ONLY,
+      { gate: countingGate },
+    );
+    expect(gateCalls).toBe(1); // the ordinary path does gate
+
+    gateCalls = 0;
+    await discoverViaBoard(db, companyId, realJobId(), ENGINEER_ONLY, {
+      fetchPostings: async () => [
+        { title: 'Staff Engineer 2', url: 'https://jobs.ashbyhq.com/ramp/bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb' },
+      ],
+    });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM page_snapshots').get()).toEqual({ n: 0 });
+  });
+
+  it('falls back to the paid search when the board cannot be read', async () => {
+    // A board outage must cost a search, never a run.
+    const companyId = trackedCompanyOnAshby();
+
+    const used = await discoverViaBoard(db, companyId, realJobId(), ENGINEER_ONLY, {
+      fetchPostings: async () => {
+        throw new Error('HTTP 503');
+      },
+    });
+
+    expect(used).toBe(false);
+    const logs = listOperationalLogs(db, { action: 'board-listing' });
+    expect(logs[0]!.outcome).toBe('failed');
+    expect(JSON.parse(logs[0]!.context!).fellBackTo).toBe('web-search');
+  });
+
+  it('declines when nothing tracked proves which board the company uses', async () => {
+    // Guessing a slug from a company name silently returns another
+    // company's postings, and every one would be tracked and enriched.
+    const company = createCompany(db, 'https://acme.example.com', 'Acme');
+    createRole(db, { companyId: company.id, url: 'https://acme.example.com/careers/1' });
+
+    expect(await discoverViaBoard(db, company.id, realJobId(), ENGINEER_ONLY, { fetchPostings: async () => [] })).toBe(false);
+  });
+
+  it('records how many postings the board returned', async () => {
+    const companyId = trackedCompanyOnAshby();
+    await discoverViaBoard(db, companyId, realJobId(), ENGINEER_ONLY, {
+      fetchPostings: async () => [{ title: 'Staff Engineer', url: 'https://jobs.ashbyhq.com/ramp/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' }],
+    });
+
+    const logs = listOperationalLogs(db, { action: 'board-listing' });
+    expect(JSON.parse(logs[0]!.context!)).toMatchObject({ provider: 'ashby', board: 'ramp', postings: 1 });
+  });
+});
+
+describe('spend bounds on discovery', () => {
+  const ASHBY_ROLE = 'https://jobs.ashbyhq.com/ramp/34413f8d-26bf-4bbc-8ade-eb309a0e2245';
+
+  function company(): number {
+    const created = createCompany(db, 'https://ramp.example.com', 'Ramp');
+    createRole(db, { companyId: created.id, url: ASHBY_ROLE });
+    return created.id;
+  }
+
+  function jobId(): number {
+    return enqueueJob(db, { topic: 'discovery', payload: { kind: 'company-discover', companyId: 1 } }).id;
+  }
+
+  function postings(count: number): { title: string; url: string }[] {
+    return Array.from({ length: count }, (_unused, n) => ({
+      title: `Engineer ${n}`,
+      url: `https://jobs.ashbyhq.com/ramp/${String(n).padStart(8, '0')}-aaaa-4aaa-aaaa-aaaaaaaaaaaa`,
+    }));
+  }
+
+  it('caps how many roles one run may create', async () => {
+    // Every created role chains a structural extraction *and* a
+    // sonnet-with-web-search research call, and a board hands over its
+    // whole list — 631 postings for Stripe when this was measured. Without
+    // a cap, one `cm discover` is an unbounded bill.
+    const companyId = company();
+
+    const result = await applyDiscoveredRoles(db, companyId, { roles: postings(50) }, ENGINEER_ONLY, {
+      gate: async () => ({ track: true, reason: 'open' }),
+      maxNewRoles: 10,
+    });
+
+    expect(result.created).toBe(10);
+    expect(result.capped).toBe(40);
+    expect(listRoles(db, { companyId, includeTerminal: true }).length).toBe(11); // the seed plus ten
+  });
+
+  it('refuses the board path when nothing would filter the results', async () => {
+    // The shipped default `titleKeywords: []` matches everything, so
+    // reading a whole board without a filter is a dump, not discovery. The
+    // web search returns a handful by construction.
+    let fetched = false;
+    const used = await discoverViaBoard(db, company(), jobId(), NO_KEYWORDS, {
+      fetchPostings: async () => {
+        fetched = true;
+        return postings(5);
+      },
+    });
+
+    expect(used).toBe(false);
+    expect(fetched).toBe(false);
+    const log = listOperationalLogs(db, { action: 'board-listing' })[0]!;
+    expect(JSON.parse(log.context!).reason).toMatch(/titleKeywords is empty/);
+  });
+
+  it('falls back to the search when the board lists nothing', async () => {
+    // A legacy board left up after an ATS migration returns `jobs: []`.
+    // Treating that as a result would mean such a company gets nothing from
+    // either path, forever.
+    const used = await discoverViaBoard(db, company(), jobId(), ENGINEER_ONLY, { fetchPostings: async () => [] });
+
+    expect(used).toBe(false);
+    expect(JSON.parse(listOperationalLogs(db, { action: 'board-listing' })[0]!.context!).fellBackTo).toBe(
+      'web-search',
+    );
+  });
+
+  it('reads the board from the most recently added role, not the most recently touched', async () => {
+    // A refresh re-stamps `updated_at`, so ordering by it would let an old
+    // posting on the company's previous ATS outrank a newly added one and
+    // pin discovery to a list that no longer grows.
+    const created = createCompany(db, 'https://moved.example.com', 'Moved');
+    const old = createRole(db, { companyId: created.id, url: ASHBY_ROLE });
+    const recent = createRole(db, { companyId: created.id, url: 'https://boards.greenhouse.io/newco/jobs/123' });
+    db.prepare("UPDATE roles SET created_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(old.id);
+    db.prepare("UPDATE roles SET created_at = '2026-01-01T00:00:00.000Z', updated_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(recent.id);
+
+    let seen: string | undefined;
+    await discoverViaBoard(db, created.id, jobId(), ENGINEER_ONLY, {
+      fetchPostings: async (board) => {
+        seen = board.board;
+        return [];
+      },
+    });
+
+    expect(seen).toBe('newco');
   });
 });

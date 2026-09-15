@@ -82,6 +82,17 @@ export interface Settings {
    * total deletion instead.
    */
   prune_after_days: number;
+  /**
+   * Most roles one `cm discover` run may create for one company.
+   *
+   * A hard stop on spend, because every role created chains a structural
+   * extraction *and* a sonnet-with-web-search research call. Reading a
+   * company's whole job board is free; acting on all 631 of Stripe's
+   * postings is not, and `claude_max_budget_usd` is a per-call cap, not a
+   * total. A run that hits this leaves the rest for the next one rather
+   * than failing.
+   */
+  discover_max_new_roles_per_run: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -95,6 +106,7 @@ const DEFAULT_SETTINGS: Settings = {
   stale_running_job_minutes: 30,
   daemon_idle_exit_minutes: 30,
   prune_after_days: 90,
+  discover_max_new_roles_per_run: 25,
   browser_trace: 'on-failure',
   browser_trace_keep: 20,
 };
@@ -131,6 +143,10 @@ export function loadSettings(): Settings {
     stale_running_job_minutes: numberOr(settings.stale_running_job_minutes, DEFAULT_SETTINGS.stale_running_job_minutes),
     daemon_idle_exit_minutes: numberOr(settings.daemon_idle_exit_minutes, DEFAULT_SETTINGS.daemon_idle_exit_minutes),
     prune_after_days: positiveOr(settings.prune_after_days, DEFAULT_SETTINGS.prune_after_days),
+    discover_max_new_roles_per_run: positiveOr(
+      settings.discover_max_new_roles_per_run,
+      DEFAULT_SETTINGS.discover_max_new_roles_per_run,
+    ),
     browser_trace: oneOfOr(settings.browser_trace, TRACE_MODES, DEFAULT_SETTINGS.browser_trace),
     browser_trace_keep: Math.max(1, Math.floor(numberOr(settings.browser_trace_keep, DEFAULT_SETTINGS.browser_trace_keep))),
   };
