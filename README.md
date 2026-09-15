@@ -64,6 +64,7 @@ cm companies add/list/show/set-preference/set-connections
 cm roles add/list/show/set-status/set-reapply     # add is idempotent; --force takes a new snapshot
 cm recruiters ping/respond/list
 cm interview-note add
+cm references add/list/rm  # attach a CV, cover letter or the answers you sent (copies; original untouched)
 cm tips <role-id>
 cm roles form <id>         # what the application form asks: how many questions, which required,
                            #   how much writing (Ashby + Greenhouse; free, no model call)

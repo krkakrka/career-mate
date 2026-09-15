@@ -30,6 +30,7 @@ import { scoreRole, scoreRoleWithConfig } from '../../scoring/priority.js';
 import { roleStructuralPayload } from '../../domain/enrichment-payload.js';
 import { enqueueEnrichment, enqueueRecomputesAndRun, queueRecomputes } from '../enqueue-enrichment.js';
 import { reportKnownErrors, reportKnownErrorsAsync } from '../handle-known-errors.js';
+import { printRoleReferences } from './references.js';
 import {
   parseDate,
   parseHttpUrl,
@@ -62,6 +63,7 @@ function printRoleDetail(role: Role, markers: Map<string, string>, score: number
   console.log(`Remote/EU: ${role.remote_eu ?? '(unknown)'}${research}`);
   console.log(`Priority score: ${score.toFixed(2)}`);
   console.log(`Created: ${role.created_at}`);
+  printRoleReferences(getDb(), role.id);
 }
 
 
