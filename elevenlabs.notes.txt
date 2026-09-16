@@ -1,0 +1,71 @@
+This might sound a bit silly, but when I discovered that ElevenLabs were started by two polish guys, Mati And Piotr, I feel a dash of pride.
+I'm not from Poland myself but I do visit it rather often, I spend quite some time in a country side home my parents built next to Lazdijai, a small city in Lithuania, right next to the border.
+
+What they've built is an amazing achievement, but the bigger reason is problem/opportunity they've decided to tackle and their vision - voice as one of the primary interfaces to AI, something I'd love to contribute to.
+At this point It's not even a question if that's the case, the timing is spot on with this ever growing AI wave, the resources/talent is there as well.
+Anyway, the future looks very bright for ElevenLabs.
+
+Why I didn't apply sooner?
+I wasn't aware that ElevenLabs was even a thing until an ex-colleague of mine mentioned it.
+I'm really happy he did, I'm very excited about the company and I'll be eagerly following it's development.
+
+
+
+
+
+
+When I wrote this I didn't expect to expand this much, I really hope you use AI for summarizing!
+
+Value wise I'd say Index administration tool at CF Benchmarks, which near eliminated costly errors and enabled the company to continue adding and managing additional indices without increasing head count.
+Alternatively I'd say refactoring ZITITY's product (frontend, backed and supporting tools and company processes) from single pickup-single delivery to multi-pickup-multi-delivery but I left the company before it could scale.
+
+I'll start with a bit of context about CF Benchmarks and financial indices in general, then I'll explain my role in it.
+
+CF Benchmarks is a financial index provider for crypto's.
+An index, simply put, is a time series of numbers that value something - when you see Bitcoin's price somewhere on the internet it's a VERY high chance that value was calculated by CF Benchmarks.
+Institutional clients use those indices for contract settlements, ETFs calculation and various other use cases.
+And a mistake in an index costs A LOT to the client, and therefore to CF Benchmarks as well, both in money and reputation.
+
+To reduce the likelihood of mistakes CF Benchmarks has a bunch of processes - basket index rebalancing, reconciliation between different calculation environments, etc.
+Before I joined these processes were supported by tools like good old spreadsheets, slack, python script that run on local machines and the "Admin" tool - a web application, which essentially was a collection of JSON editors/viewers that interact with APIs.
+My task was upgrading these processes and the tools supporting it, as well as enable scaling the number of indices the team can manage.
+
+And I'm happy to say all of this went really well.
+- The number of supported indices went from from around 70 regulated (where the index needs to adhere to certain laws) + 100 unregulated (with relaxed rules) to ~200 regulated, ~1000 unregulated and ~200 xStocks (VERY regulated, these indices enable trading certain stocks 24/7), while the team supporting them remained 2 operations people.
+- Fat finger errors were basically eliminated, we didn't experience any after I joined that was related to fat finger errors, or tooling.
+
+I've contributed to the above by speaking with various stakeholders and operations people, gathering all the undocumented knowledge and scripts and porting all of that over to the Admin tool - designed the UI, implemented it, the missing API end points as well backend business logic where needed.
+
+The Admin tool's scope is pretty large, so let me narrow down on a single example process, what it was, why it was important and how I implemented it - "rebalance tool".
+The process of rebalancing had to be done quarterly (some times more often for certain indices), and in the past this is where most errors happened, for which the company had to pay quite a lot of money.
+Imagine people people flying to London for a few days (it was a fully remote company), entering data into separate spreadsheets and scripts, looking over each others shoulder for validation and eating pizza.
+Then imagine a few days later, if a mistake was made,  people getting an alert at night, getting up and fixing code and data in production, and then paying clients big sums of money for it.
+The way this whole process was streamlined and errors were eliminated was via the "rebalance tool" in the Admin- a dynamic form with super strict validation and various warnings for the user, for example if some number is weirdly too big or too small, if the percentages don't add up, etc. The form was dynamic, where the set of inputs depended on previous inputs and on the index type, with a ton of validation checks, both Frontend and Backend, and with automated auto filling where possible, to reduce copy pasting as much as possible and increase automation.
+All of this required finding the right balance between rigid rules yet still allowing some flexibility where it's absolutely necessary, making sure all of that was auditable in the future, orchestrating various API endpoints and FE state are in sync and making sure 2 people don't overwrite each others changes.
+
+Some other notes:
+- No one ever knows everything and in this case I had to take over a codebase which NO ONE was familiar with (last dev left before I joined), and was written in a heavy functional programming style, which I had to learn from scratch.
+- All of that happened before LLMs were powerful enough to both view and edit code, or weren't yet allowed by the company.
+- Tech stack:
+-- BE: Java, Spring
+-- FE: Typescript, MobX for state management, io-ts and fp-ts (TS libraries heavily oriented towards functional programming).
+--- I do NOT recommend mixing MobX and functional programming.
+
+
+
+
+
+
+
+- User feedback - I had direct contact with various users and stakeholders, feedback was immediate, we kept in close touch the whole way. At times I would participate while they were using the tool, other times they recorded the use, which I used to improve the tool further.
+- No more errors that cost money. How do I know it's because of those tools? Again, I've heard from users, seen them use it and react with "Whew that was close!" after some warning appeared.
+
+
+
+
+
+
+
+I did for small experiment - I worked on something for my kids to learn english, but the older models couldn't speak lithuanian in a passable manner, so I abandoned it.
+However from what I hear the new model sound pretty good, might have to resurrect the idea.
+

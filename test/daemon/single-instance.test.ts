@@ -20,6 +20,15 @@ function spawnDaemon(): ChildProcess {
   return child;
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 15_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
 beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'career-mate-daemon-race-'));
 });
@@ -49,21 +58,23 @@ describe('daemon single-instance enforcement', () => {
       const first = spawnDaemon();
       const second = spawnDaemon();
 
-      // Give both a window to race for the pid-file claim and for the loser to exit.
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      const pidPath = path.join(dataDir, 'daemon.pid');
-      expect(fs.existsSync(pidPath)).toBe(true);
-      const survivorPid = Number(fs.readFileSync(pidPath, 'utf-8').trim());
-      expect(isProcessAlive(survivorPid)).toBe(true);
-
       const candidatePids = [first.pid, second.pid].filter(
         (pid): pid is number => pid !== undefined,
       );
-      const aliveCount = candidatePids.filter((pid) => isProcessAlive(pid)).length;
-      expect(aliveCount).toBe(1);
+      const aliveCount = (): number => candidatePids.filter((pid) => isProcessAlive(pid)).length;
+
+      // Wait for the race to settle rather than sleeping a fixed 800ms: two
+      // daemons booting (tsx + migrations each) take longer than that on a
+      // loaded machine, and this test then failed for a reason that had
+      // nothing to do with what it checks.
+      const pidPath = path.join(dataDir, 'daemon.pid');
+      const settled = await waitFor(() => fs.existsSync(pidPath) && aliveCount() === 1);
+      expect(settled).toBe(true);
+
+      const survivorPid = Number(fs.readFileSync(pidPath, 'utf-8').trim());
+      expect(isProcessAlive(survivorPid)).toBe(true);
       expect(candidatePids).toContain(survivorPid);
     },
-    10000,
+    20000,
   );
 });

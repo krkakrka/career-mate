@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../../src/db/client.js';
 import { enqueueJob, listJobs, requeueStaleRunningJobs } from '../../src/db/repositories/jobs.js';
 import { listOperationalLogs } from '../../src/db/repositories/operational-logs.js';
+import { isProcessAlive } from '../../src/lib/pid-file.js';
 import { killDaemon } from '../helpers/kill-daemon.js';
 import { runCli } from '../helpers/run-cli.js';
 
@@ -175,6 +176,116 @@ describe('crash handling', () => {
       db.close();
     }
   }, 40_000);
+});
+
+describe('explicit start', () => {
+  it('reports a daemon that dies during startup, with why, instead of "Daemon started."', async () => {
+    // Exactly the state a migration file edited after it was applied leaves
+    // behind: `_migrations` says 0008 ran, the column it now adds is missing,
+    // and the runner will never look at it again.
+    const db = openDb(dbPath);
+    db.exec('ALTER TABLE jobs DROP COLUMN claimed_at');
+    db.close();
+
+    const result = runCli(['daemon', 'start'], { dataDir, allowDaemonAutostart: true });
+
+    // The old command spawned and returned "Daemon started." with exit 0
+    // while the child was already dead — the failure was only findable by
+    // knowing to open .data/daemon.log.
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('claimed_at');
+    expect(result.stderr).toContain('daemon.log');
+    expect(result.stdout).not.toContain('Daemon started');
+    expect(fs.existsSync(pidPath())).toBe(false);
+
+    // The crash happened before the daemon reached its job loop — before
+    // the old code installed its crash handlers — so nothing durable said
+    // why. `cm logs` must have the answer now.
+    const logs = openDb(dbPath);
+    try {
+      const failures = listOperationalLogs(logs, { component: 'daemon', severity: 'error' });
+      expect(failures).toHaveLength(1);
+      expect(failures[0]!.action).toBe('startup');
+      expect(failures[0]!.error).toContain('claimed_at');
+    } finally {
+      logs.close();
+    }
+
+    // And `status` — the command the user actually reaches for — says so too.
+    const status = runCli(['daemon', 'status'], { dataDir });
+    expect(status.stdout).toContain('Daemon not running');
+    expect(status.stdout).toContain('startup');
+    expect(status.stdout).toContain('claimed_at');
+    expect(status.stdout).toContain('daemon.log');
+  }, 40_000);
+
+  it('confirms a live pid on success and is idempotent', async () => {
+    writeSettings({ daemon_idle_exit_minutes: 0 });
+
+    const first = runCli(['daemon', 'start'], { dataDir, allowDaemonAutostart: true });
+    expect(first.exitCode).toBe(0);
+    expect(first.stdout).toMatch(/Daemon running \(pid \d+\)/);
+    const pid = Number(fs.readFileSync(pidPath(), 'utf-8').trim());
+    expect(first.stdout).toContain(`pid ${pid}`);
+
+    const second = runCli(['daemon', 'start'], { dataDir, allowDaemonAutostart: true });
+    expect(second.exitCode).toBe(0);
+    expect(second.stdout).toContain(`already running (pid ${pid})`);
+
+    const status = runCli(['daemon', 'status'], { dataDir });
+    expect(status.stdout).toContain(`Daemon running (pid ${pid})`);
+  }, 40_000);
+
+  it('status on a daemon that stopped cleanly says so, not just "not running"', async () => {
+    writeSettings({ daemon_idle_exit_minutes: 0.001 });
+    runCli(['daemon', 'start'], { dataDir, allowDaemonAutostart: true });
+    expect(await waitFor(() => !fs.existsSync(pidPath()))).toBe(true);
+
+    const status = runCli(['daemon', 'status'], { dataDir });
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout).toContain('Daemon not running');
+    expect(status.stdout).toMatch(/shutdown/);
+  }, 40_000);
+
+  it('survives its starter going away before it was ready', async () => {
+    writeSettings({ daemon_idle_exit_minutes: 0 });
+    const daemonEntry = fileURLToPath(new URL('../../bin/cm-daemon.js', import.meta.url));
+
+    // What `cm daemon start` timing out, or a Ctrl-C on it, looks like from
+    // the daemon's side: an IPC channel that is gone by the time `ready`
+    // is sent. A send on a closed channel surfaces as an 'error' on
+    // `process` a tick later — uncaught, that reaches crash() and kills a
+    // daemon that had just become healthy.
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, [daemonEntry], {
+      env: { ...process.env, CM_DATA_DIR: dataDir },
+      detached: true,
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    });
+    child.unref();
+    child.disconnect();
+
+    expect(await waitFor(() => fs.existsSync(pidPath()))).toBe(true);
+    const pid = Number(fs.readFileSync(pidPath(), 'utf-8').trim());
+    expect(pid).toBe(child.pid);
+
+    // Long enough for startup to finish and the doomed send to be processed.
+    const died = await waitFor(() => !isProcessAlive(pid), 2500);
+    expect(died).toBe(false);
+
+    const db = openDb(dbPath);
+    try {
+      expect(listOperationalLogs(db, { component: 'daemon', severity: 'error' })).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  }, 40_000);
+
+  it('status with no history stays terse', () => {
+    const status = runCli(['daemon', 'status'], { dataDir });
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout.trim()).toBe('Daemon not running.');
+  });
 });
 
 describe('daemon log', () => {
