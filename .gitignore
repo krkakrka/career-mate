@@ -18,5 +18,4 @@ cv/
 # Any PDF in this repo is a personal document (CVs, offer letters), never source.
 # `cv/` did not match the `CV 1.pdf` sitting in the root.
 *.pdf
-prompt.md
 packets/
