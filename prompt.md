@@ -48,8 +48,7 @@ Look at what this company's Ashby form actually asks, and tell me:
   don't. Name which roles, in which order, and whether to mention the other in the form.
 - For every free-text field: a complete, drafted answer in my voice. Not a template — the actual text
   I will paste. Cover letters included, even when marked optional (they're read at companies this size).
-- Any field that's a trap: "salary expectations" (I want €100k+ and equity, and I'd rather anchor than
-  hand over a number first), "why this company", "notice period" (immediate), work authorization
+- Any field that's a trap: "salary expectations", "why this company", "notice period" (immediate), work authorization
   (Lithuania, EOR or B2B, no sponsorship needed, no visa question).
 - Anything the posting explicitly requires that I must prepare first — n8n, for instance, wants a
   screenshot of a workflow I've built.
